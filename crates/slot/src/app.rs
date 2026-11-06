@@ -5520,7 +5520,7 @@ impl App {
         let cart_t = ((p - 0.34) / 0.66).clamp(0.0, 1.0);
         let cart_eased = cart_t * cart_t * (3.0 - 2.0 * cart_t);
         let x0 = canvas.w / 2.0 - cw / 2.0;
-        let x1 = canvas.w * 0.68 - cw / 2.0;
+        let x1 = canvas.w / 2.0 - cw / 2.0;
         let y0 = (canvas.h - h) / 2.0 - ch * 0.72;
         let y1 = (canvas.h - ch) / 2.0;
         let (x, y) = (x0 + (x1 - x0) * cart_eased, y0 + (y1 - y0) * cart_eased);
@@ -6573,7 +6573,8 @@ impl App {
         if !self.on_shelf() {
             return;
         }
-        self.box_scene = BoxScene::Carousel;
+        // Preserve Box View context across the vanilla insert/play/eject phases.
+        // Cartridge View remains unchanged because its box scene is never active.
         let at = self.shelf().index;
         let Some(cart) = self.shelf_mut().carts.get_mut(at).map(|c| {
             c.read_header();
