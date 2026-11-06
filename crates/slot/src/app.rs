@@ -4444,7 +4444,6 @@ impl App {
             | QuickRow::ControlsShelf
             | QuickRow::ControlsInGame
             | QuickRow::LidOff
-            | QuickRow::BoxView
             | QuickRow::FetchArt
             | QuickRow::Network
             | QuickRow::Wifi
@@ -5637,7 +5636,7 @@ impl App {
                 self.draw_background(out);
                 match (self.core_picker_shown(), self.selected_stem()) {
                     (Some(picker), Some(stem)) => {
-                        let draw_picker = || {
+                        let mut draw_picker = || {
                             let open = ease(picker.openness(self.now()));
                             let dim = 1.0 + (CORE_PICKER_DIM - 1.0) * open;
                             self.shelf().draw_row(
