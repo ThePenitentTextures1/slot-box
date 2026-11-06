@@ -20,7 +20,7 @@ pub mod card_log;
 pub mod cart_faces;
 pub mod core;
 pub mod core_picker;
-##[cfg(unix)]
+#[cfg(unix)]
 pub mod crash;
 #[cfg(not(unix))]
 pub mod crash {
