@@ -611,25 +611,25 @@ impl Shelf {
             }
             if self.box_view {
                 if let Some(box_faces) = self.box_faces(i) {
-                let (tex, (iw, ih)) = if slot == 0 {
-                    (box_faces.front, box_faces.front_size)
-                } else {
-                    (box_faces.side, box_faces.side_size)
-                };
-                if iw > 0 && ih > 0 {
-                    let h = ch as f32 * scale;
-                    let w = h * iw as f32 / ih as f32;
-                    let cx = self.centre(canvas, slot) + shake;
-                    out.push(Draw::Tex {
-                        x: cx - w / 2.0,
-                        y: foot_y(ch as f32) - h,
-                        w,
-                        h,
-                        tex,
-                        alpha: alpha * dim,
-                    });
-                    continue;
-                }
+                    let (tex, (iw, ih)) = if slot == 0 {
+                        (box_faces.front, box_faces.front_size)
+                    } else {
+                        (box_faces.side, box_faces.side_size)
+                    };
+                    if iw > 0 && ih > 0 {
+                        let h = ch as f32 * scale;
+                        let w = h * iw as f32 / ih as f32;
+                        let cx = self.centre(canvas, slot) + shake;
+                        out.push(Draw::Tex {
+                            x: cx - w / 2.0,
+                            y: foot_y(ch as f32) - h,
+                            w,
+                            h,
+                            tex,
+                            alpha: alpha * dim,
+                        });
+                        continue;
+                    }
                 }
             }
             if alpha < 1.0 {
