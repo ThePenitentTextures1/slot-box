@@ -118,7 +118,8 @@ pub use quick_menu::{
 pub use rebuild::{headline_face, rebuild_count_face, rebuild_title_face, RebuildScreen};
 pub use refusal::Refusal;
 pub use shelf::{
-    box_size, foot_y, repeat_gap, rest_y, BoxFaceTextures, Shelf, HEART_INK, HEART_SCALE,
+    box_size, box_view_dimensions, foot_y, repeat_gap, rest_y, BoxFaceTextures, Shelf,
+    BOX_VIEW_SCALE, HEART_INK, HEART_SCALE,
     REPEAT_DELAY_MS,
 };
 pub use shell::{
