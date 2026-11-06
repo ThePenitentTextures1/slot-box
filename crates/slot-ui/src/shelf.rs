@@ -48,11 +48,27 @@ pub fn repeat_gap(fired: usize) -> Millis {
     REPEAT_MS[fired.min(REPEAT_MS.len() - 1)]
 }
 
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct BoxFaceTextures {
+    pub front: TexId,
+    pub side: TexId,
+    pub back: TexId,
+    pub front_size: (u32, u32),
+    pub side_size: (u32, u32),
+    pub back_size: (u32, u32),
+    /// Pivot at the spine/front seam in the flattened net's pixel coordinates.
+    pub pivot: [f32; 2],
+    /// Front-face center in the flattened net's pixel coordinates.
+    pub front_center: [f32; 2],
+}
+
 pub struct Shelf {
     pub carts: Vec<Cart>,
     pub index: usize,
     pub scroll: f32,
     faces: Vec<Option<TexId>>,
+    box_faces: Vec<Option<BoxFaceTextures>>,
+    box_checked: Vec<bool>,
     wrapped: Vec<Option<TexId>>,
     interiors: Vec<Option<TexId>>,
     shadow: Option<TexId>,
@@ -72,6 +88,8 @@ impl Shelf {
     pub fn new(carts: Vec<Cart>) -> Self {
         Shelf {
             faces: vec![None; carts.len()],
+            box_faces: vec![None; carts.len()],
+            box_checked: vec![false; carts.len()],
             wrapped: vec![None; carts.len()],
             interiors: vec![None; carts.len()],
             hearted: vec![false; carts.len()],
@@ -105,8 +123,11 @@ impl Shelf {
             .drain(..)
             .chain(self.interiors.drain(..))
             .flatten()
+            .chain(self.box_faces.drain(..).flatten().flat_map(|b| [b.front, b.side, b.back]))
             .collect();
         self.faces = vec![None; carts.len()];
+        self.box_faces = vec![None; carts.len()];
+        self.box_checked = vec![false; carts.len()];
         self.wrapped = vec![None; carts.len()];
         self.interiors = vec![None; carts.len()];
         self.hearted = vec![false; carts.len()];
@@ -176,6 +197,27 @@ impl Shelf {
 
     pub fn set_face(&mut self, i: usize, tex: TexId) -> Option<TexId> {
         self.faces.get_mut(i).and_then(|f| f.replace(tex))
+    }
+
+    pub fn box_faces(&self, i: usize) -> Option<BoxFaceTextures> {
+        self.box_faces.get(i).copied().flatten()
+    }
+
+    pub fn box_checked(&self, i: usize) -> bool {
+        self.box_checked.get(i).copied().unwrap_or(true)
+    }
+
+    pub fn set_box_faces(&mut self, i: usize, faces: Option<BoxFaceTextures>) -> Option<BoxFaceTextures> {
+        let checked = self.box_checked.get_mut(i)?;
+        *checked = true;
+        self.box_faces.get_mut(i)?.replace(faces).flatten()
+    }
+
+    pub fn take_box_faces(&mut self, i: usize) -> Option<BoxFaceTextures> {
+        if let Some(checked) = self.box_checked.get_mut(i) {
+            *checked = false;
+        }
+        self.box_faces.get_mut(i).and_then(Option::take)
     }
 
     pub fn set_interior(&mut self, i: usize, tex: TexId) -> Option<TexId> {
@@ -556,6 +598,27 @@ impl Shelf {
                     alpha: alpha * dim,
                 });
                 continue;
+            }
+            if let Some(box_faces) = self.box_faces(i) {
+                let (tex, (iw, ih)) = if slot == 0 {
+                    (box_faces.front, box_faces.front_size)
+                } else {
+                    (box_faces.side, box_faces.side_size)
+                };
+                if iw > 0 && ih > 0 {
+                    let h = ch as f32 * scale;
+                    let w = h * iw as f32 / ih as f32;
+                    let cx = self.centre(canvas, slot) + shake;
+                    out.push(Draw::Tex {
+                        x: cx - w / 2.0,
+                        y: foot_y(ch as f32) - h,
+                        w,
+                        h,
+                        tex,
+                        alpha: alpha * dim,
+                    });
+                    continue;
+                }
             }
             if alpha < 1.0 {
                 let backing = match self.shell(i) {
