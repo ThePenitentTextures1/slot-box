@@ -22,7 +22,7 @@ use slot_ui::{
 };
 
 use crate::audio::Sfx;
-use crate::boxview;
+use crate::boxview::{self, BoxItem, BoxScene};
 use crate::core_picker::{Chip, CorePicker, Outcome, Press};
 use crate::link_kind::{link_carried, link_dual, link_kind, serial_option, LinkKind};
 use crate::link_radio::{radio_jobs, LinkRole, RadioJob, RadioJobs};
@@ -345,23 +345,6 @@ pub enum Phase {
     Unwrap {
         stem: String,
     },
-}
-
-#[derive(Copy, Clone, Debug, PartialEq)]
-enum BoxItem {
-    Cartridge,
-    Box,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq)]
-enum BoxScene {
-    Carousel,
-    FlippingBack { started: Millis },
-    Back { zoom: f32, pan: [f32; 2] },
-    FlippingFront { started: Millis },
-    Opening { started: Millis, from_back: bool },
-    Open { item: BoxItem },
-    Closing { started: Millis },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -5733,7 +5716,7 @@ impl App {
                 self.draw_background(out);
                 self.chrome(cart, 0.0, out);
             }
-            Phase::Inserting { cart, resumed, .. } => {
+            Phase::Inserting { cart, resumed, t, .. } => {
                 let draw_insert = || {
                     if !resumed {
                         self.draw_background(out);
@@ -5742,11 +5725,15 @@ impl App {
                     }
                     self.chrome(cart, 0.0, out);
                 };
-                if self.carousel_view == CarouselView::Boxes {
-                    boxview::insert(draw_insert);
-                } else {
-                    draw_insert();
-                }
+                if self.carousel_view == CarouselView::Boxes && self.box_scene != BoxScene::Carousel {
+                    if let Some((_, faces, (w, h, _))) = self.selected_box() {
+                        boxview::insert(
+                            self.canvas(), faces,
+                            (w * slot_ui::BOX_VIEW_SCALE * OPEN_BOX_SCALE, h * slot_ui::BOX_VIEW_SCALE * OPEN_BOX_SCALE),
+                            (*t / INSERT_S).clamp(0.0, 1.0), out, draw_insert,
+                        );
+                    } else { draw_insert(); }
+                } else { draw_insert(); }
             }
             Phase::Ejecting { .. }
                 if self.framed_panel() && (self.shows_game() || self.screen > 0.0) =>
@@ -5756,18 +5743,23 @@ impl App {
             Phase::Playing { .. } if self.framed_panel() && self.screen < 1.0 => {
                 self.draw_powering(out)
             }
-            Phase::Ejecting { cart, .. } => {
+            Phase::Ejecting { cart, t } => {
                 let draw_eject = || {
                     self.draw_background(out);
                     self.shelf()
                         .draw_row(self.canvas(), Some(cart), 0.0, self.seat(), 1.0, out);
                     self.chrome(cart, 0.0, out);
                 };
-                if self.carousel_view == CarouselView::Boxes {
-                    boxview::eject(draw_eject);
-                } else {
-                    draw_eject();
-                }
+                if self.carousel_view == CarouselView::Boxes && self.box_scene != BoxScene::Carousel {
+                    if let Some((_, faces, (w, h, _))) = self.selected_box() {
+                        let progress = (1.0 - (*t / EJECT_S).clamp(0.0, 1.0)).clamp(0.0, 1.0);
+                        boxview::eject(
+                            self.canvas(), faces,
+                            (w * slot_ui::BOX_VIEW_SCALE * OPEN_BOX_SCALE, h * slot_ui::BOX_VIEW_SCALE * OPEN_BOX_SCALE),
+                            progress, out, draw_eject,
+                        );
+                    } else { draw_eject(); }
+                } else { draw_eject(); }
             }
             Phase::Playing { cart } if self.screen < 1.0 => {
                 self.draw_background(out);
