@@ -2470,11 +2470,11 @@ impl App {
                     return false;
                 }
                 match action {
-                    Action::GbaDown(Btn::L2) => {
+                    Action::GbaDown(Btn::L2 | Btn::Select) => {
                         self.box_scene = BoxScene::FlippingBack { started: self.now() };
                         true
                     }
-                    Action::GbaDown(Btn::A) | Action::Insert => {
+                    Action::GbaDown(Btn::A | Btn::Start) | Action::Insert => {
                         self.play_held = None;
                         self.box_scene = BoxScene::Opening {
                             started: self.now(),
@@ -2510,7 +2510,7 @@ impl App {
                     self.pan_box_back(-36.0, 0.0);
                     true
                 }
-                Action::GbaDown(Btn::A) | Action::Insert => {
+                Action::GbaDown(Btn::A | Btn::Start) | Action::Insert => {
                     self.box_scene = BoxScene::Opening {
                         started: self.now(),
                         from_back: true,
