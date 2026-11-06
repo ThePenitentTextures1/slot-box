@@ -117,7 +117,7 @@ pub use quick_menu::{
 };
 pub use rebuild::{headline_face, rebuild_count_face, rebuild_title_face, RebuildScreen};
 pub use refusal::Refusal;
-pub use shelf::{box_size, foot_y, repeat_gap, rest_y, Shelf, HEART_INK, HEART_SCALE, REPEAT_DELAY_MS};
+pub use shelf::{box_size, foot_y, repeat_gap, rest_y, BoxFaceTextures, Shelf, HEART_INK, HEART_SCALE, REPEAT_DELAY_MS};
 pub use shell::{
     gb_plastics, gb_table_shells, gba_plastics, gba_shell_for,
     indexed_shell, lookup_order_is_exact_then_family_then_default, shell_for, shell_presets, table_keys, Finish,
