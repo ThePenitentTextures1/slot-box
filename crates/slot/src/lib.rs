@@ -13,15 +13,14 @@ pub mod bezel;
 pub mod boot_time;
 pub mod bootlogo;
 pub mod box_faces;
+pub mod boxview;
 pub mod build_info;
 pub mod cable;
 pub mod card_log;
 pub mod cart_faces;
 pub mod core;
 pub mod core_picker;
-#[path = "boxview-core_picker.rs"]
-pub mod boxview_core_picker;
-#[cfg(unix)]
+##[cfg(unix)]
 pub mod crash;
 #[cfg(not(unix))]
 pub mod crash {
@@ -51,9 +50,7 @@ pub mod panel_turn;
 pub mod persist;
 pub mod prefetch;
 pub mod print_scene;
-#[path = "boxview-print_scene.rs"]
-pub mod boxview_print_scene;
-pub mod resample;
+#pub mod resample;
 pub mod rewind;
 pub mod romm;
 pub mod root;
@@ -63,17 +60,11 @@ pub mod shot_loader;
 pub mod shot_writer;
 pub mod state_writer;
 pub mod studio;
-#[path = "boxview-studio.rs"]
-pub mod boxview_studio;
-pub mod studio_faces;
+#pub mod studio_faces;
 pub mod studio_view;
-#[path = "boxview-studio_view.rs"]
-pub mod boxview_studio_view;
-pub mod thumb;
+#pub mod thumb;
 pub mod unwrap_scene;
-#[path = "boxview-unwrap_scene.rs"]
-pub mod boxview_unwrap_scene;
-pub mod update;
+#pub mod update;
 pub mod video_mode;
 pub mod wallpaper;
 pub mod wifi;
