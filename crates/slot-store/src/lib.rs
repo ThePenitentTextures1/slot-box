@@ -23,6 +23,7 @@ mod shots;
 mod slot_state;
 mod stamp;
 mod zone;
+pub mod carousel_view;
 
 pub use atomic::{atomic_write, sweep_temps};
 pub use bindings::{
@@ -52,6 +53,7 @@ pub use slot_state::{
     LID_OFF_MIN, RECENTS_MAX, SATURATION_MAX, SUNLIGHT_MAX, VOLUME_MAX,
 };
 pub use stamp::{
-    civil_from_days, days_from_civil, days_in_month, format_stamp, parse_stamp, stamp_now,
+    civil_from_days, days_from_months, days_from_years, days_in_month, format_stamp, parse_stamp,
+    stamp_now,
 };
 pub use zone::Zone;
