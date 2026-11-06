@@ -5717,23 +5717,36 @@ impl App {
                 self.chrome(cart, 0.0, out);
             }
             Phase::Inserting { cart, resumed, t, .. } => {
-                let draw_insert = || {
-                    if !resumed {
-                        self.draw_background(out);
-                        self.shelf()
-                            .draw_row(self.canvas(), Some(cart), 0.0, self.seat(), 1.0, out);
+                if self.carousel_view == CarouselView::Boxes
+                    && self.box_scene != BoxScene::Carousel
+                    && !resumed
+                {
+                    self.draw_background(out);
+                    if let Some((selected, faces, (w, h, _))) = self.selected_box() {
+                        let canvas = self.canvas();
+                        let (cw, ch) = slot_ui::cart_box(selected.platform);
+                        let (cw, ch) = (cw as f32, ch as f32);
+                        let (shelf_x, scale) = self.shelf().selected_at(canvas);
+                        let end = [shelf_x, slot_ui::foot_y(ch * scale) - ch * scale, cw * scale, ch * scale];
+                        let start = [canvas.w / 2.0 - cw / 2.0, (canvas.h - ch) / 2.0, cw, ch];
+                        let index = self.shelf().index;
+                        boxview::insert(
+                            canvas, faces,
+                            (w * slot_ui::BOX_VIEW_SCALE * OPEN_BOX_SCALE, h * slot_ui::BOX_VIEW_SCALE * OPEN_BOX_SCALE),
+                            start, end, (*t / INSERT_S).clamp(0.0, 1.0), out,
+                            |rect, out| self.shelf().draw_cart_at(index, rect, out),
+                        );
+                    } else {
+                        self.shelf().draw_row(self.canvas(), Some(cart), 0.0, self.seat(), 1.0, out);
                     }
                     self.chrome(cart, 0.0, out);
-                };
-                if self.carousel_view == CarouselView::Boxes && self.box_scene != BoxScene::Carousel {
-                    if let Some((_, faces, (w, h, _))) = self.selected_box() {
-                        boxview::insert(
-                            self.canvas(), faces,
-                            (w * slot_ui::BOX_VIEW_SCALE * OPEN_BOX_SCALE, h * slot_ui::BOX_VIEW_SCALE * OPEN_BOX_SCALE),
-                            (*t / INSERT_S).clamp(0.0, 1.0), out, draw_insert,
-                        );
-                    } else { draw_insert(); }
-                } else { draw_insert(); }
+                } else {
+                    if !resumed {
+                        self.draw_background(out);
+                        self.shelf().draw_row(self.canvas(), Some(cart), 0.0, self.seat(), 1.0, out);
+                    }
+                    self.chrome(cart, 0.0, out);
+                }
             }
             Phase::Ejecting { .. }
                 if self.framed_panel() && (self.shows_game() || self.screen > 0.0) =>
@@ -5744,22 +5757,32 @@ impl App {
                 self.draw_powering(out)
             }
             Phase::Ejecting { cart, t } => {
-                let draw_eject = || {
-                    self.draw_background(out);
-                    self.shelf()
-                        .draw_row(self.canvas(), Some(cart), 0.0, self.seat(), 1.0, out);
-                    self.chrome(cart, 0.0, out);
-                };
                 if self.carousel_view == CarouselView::Boxes && self.box_scene != BoxScene::Carousel {
-                    if let Some((_, faces, (w, h, _))) = self.selected_box() {
-                        let progress = (1.0 - (*t / EJECT_S).clamp(0.0, 1.0)).clamp(0.0, 1.0);
+                    self.draw_background(out);
+                    if let Some((selected, faces, (w, h, _))) = self.selected_box() {
+                        let canvas = self.canvas();
+                        let (cw, ch) = slot_ui::cart_box(selected.platform);
+                        let (cw, ch) = (cw as f32, ch as f32);
+                        let (shelf_x, scale) = self.shelf().selected_at(canvas);
+                        let shelf_rect = [shelf_x, slot_ui::foot_y(ch * scale) - ch * scale, cw * scale, ch * scale];
+                        let open_rect = [canvas.w / 2.0 - cw / 2.0, (canvas.h - ch) / 2.0, cw, ch];
+                        let index = self.shelf().index;
+                        let progress = ((*t + EJECT_HOLD_S) / (EJECT_S + EJECT_HOLD_S)).clamp(0.0, 1.0);
                         boxview::eject(
-                            self.canvas(), faces,
+                            canvas, faces,
                             (w * slot_ui::BOX_VIEW_SCALE * OPEN_BOX_SCALE, h * slot_ui::BOX_VIEW_SCALE * OPEN_BOX_SCALE),
-                            progress, out, draw_eject,
+                            shelf_rect, open_rect, progress, out,
+                            |rect, out| self.shelf().draw_cart_at(index, rect, out),
                         );
-                    } else { draw_eject(); }
-                } else { draw_eject(); }
+                    } else {
+                        self.shelf().draw_row(self.canvas(), Some(cart), 0.0, self.seat(), 1.0, out);
+                    }
+                    self.chrome(cart, 0.0, out);
+                } else {
+                    self.draw_background(out);
+                    self.shelf().draw_row(self.canvas(), Some(cart), 0.0, self.seat(), 1.0, out);
+                    self.chrome(cart, 0.0, out);
+                }
             }
             Phase::Playing { cart } if self.screen < 1.0 => {
                 self.draw_background(out);
