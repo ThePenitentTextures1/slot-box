@@ -9,6 +9,7 @@ use crate::slot_chrome::{draw_empty_slot, MOUTH_H};
 
 const SIDE_SCALE: f32 = 0.78;
 const BOX_VIEW_SCALE: f32 = 0.45;
+const BOX_PIXELS_PER_MM: f32 = (360.0 / 60.0 + 212.0 / 35.0 + 312.0 / 57.0 + 337.0 / 65.5) / 4.0;
 const SIDE_ALPHA: f32 = 1.0;
 
 pub fn rest_y(h: f32) -> f32 {
@@ -26,23 +27,31 @@ pub fn foot_y(h: f32) -> f32 {
     rest_y(h) + h
 }
 
-/// Returns the physical front width/height and spine width in the shelf's cartridge-pixel units.
+/// Returns physical front width/height and spine width at one shared Box View scale.
 fn box_dimensions(cart: &Cart, japanese: bool) -> (f32, f32, f32) {
-    let (cart_width_mm, cart_height_mm, front_width_mm, front_height_mm, depth_mm) =
-        match cart.platform {
-            Platform::Gba | Platform::Gbav if japanese => (60.0, 35.0, 90.0, 138.0, 24.0),
-            Platform::Gba | Platform::Gbav => (60.0, 35.0, 125.0, 125.0, 24.0),
-            Platform::Gb | Platform::Gbc if japanese => (57.0, 65.5, 100.0, 124.0, 22.0),
-            Platform::Gb | Platform::Gbc => (57.0, 65.5, 130.0, 130.0, 28.0),
-        };
-    let (cart_width_px, cart_height_px) = cart_box(cart.platform);
+    let (front_width_mm, front_height_mm, depth_mm) = match cart.platform {
+        Platform::Gba | Platform::Gbav if japanese => (90.0, 138.0, 24.0),
+        Platform::Gba | Platform::Gbav => (125.0, 125.0, 24.0),
+        Platform::Gb | Platform::Gbc if japanese => (100.0, 124.0, 22.0),
+        Platform::Gb | Platform::Gbc => (130.0, 130.0, 28.0),
+    };
     (
-        cart_width_px as f32 * front_width_mm / cart_width_mm,
-        cart_height_px as f32 * front_height_mm / cart_height_mm,
-        cart_width_px as f32 * depth_mm / cart_width_mm,
+        front_width_mm * BOX_PIXELS_PER_MM,
+        front_height_mm * BOX_PIXELS_PER_MM,
+        depth_mm * BOX_PIXELS_PER_MM,
     )
 }
 
+fn loose_cart_dimensions(cart: &Cart) -> (f32, f32) {
+    let (width_mm, height_mm) = match cart.platform {
+        Platform::Gba | Platform::Gbav => (60.0, 35.0),
+        Platform::Gb | Platform::Gbc => (57.0, 65.5),
+    };
+    (
+        width_mm * BOX_PIXELS_PER_MM,
+        height_mm * BOX_PIXELS_PER_MM,
+    )
+}
 
 pub fn box_size(platform: Platform) -> (u32, u32) {
     match platform {
@@ -473,9 +482,13 @@ impl Shelf {
                     false,
                 );
             }
-            let (width, _) = cart_box(cart.platform);
+            let width = if slot == 0 {
+                cart_box(cart.platform).0 as f32
+            } else {
+                loose_cart_dimensions(cart).0
+            };
             let scale = if slot == 0 { 1.0 } else { BOX_VIEW_SCALE };
-            return (width as f32 * scale, false);
+            return (width * scale, false);
         }
         match cart.platform {
             Platform::Gba | Platform::Gbav => (CART_W as f32, true),
@@ -635,14 +648,16 @@ impl Shelf {
             } else {
                 scale
             };
-            let (w, h) = if box_faces.is_some() {
-                let (front_w, front_h, side_w) =
-                    box_dimensions(cart, box_faces.is_some_and(|faces| faces.japanese));
+            let (w, h) = if let Some(faces) = box_faces {
+                let (front_w, front_h, side_w) = box_dimensions(cart, faces.japanese);
                 if slot == 0 {
                     (front_w * object_scale, front_h * object_scale)
                 } else {
                     (side_w * object_scale, front_h * object_scale)
                 }
+            } else if self.box_view && slot != 0 {
+                let (width, height) = loose_cart_dimensions(cart);
+                (width * object_scale, height * object_scale)
             } else {
                 (cw as f32 * object_scale, ch as f32 * object_scale)
             };
