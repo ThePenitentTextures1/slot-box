@@ -42,7 +42,7 @@ use crate::update::{
 use crate::video_mode::{self, VideoMode};
 use slot_store::{
     read_carousel, read_controls, read_shortcuts, write_carousel, write_controls, write_shortcuts,
-    Binding, CarouselKeys, Controls, Device, GameButton, Modifier, ShortcutKeys, LID_OFF_MIN,
+    Binding, CarouselKeys, CarouselView, Controls, Device, GameButton, Modifier, ShortcutKeys, LID_OFF_MIN,
 };
 
 pub const RECORDING: &str = "Recording";
@@ -556,6 +556,7 @@ pub struct App {
     plugged_face: Option<TexId>,
     binding_faces: HashMap<String, [(TexId, u32, u32); 2]>,
     carousel: CarouselKeys,
+    carousel_view: CarouselView,
     shortcuts: ShortcutKeys,
     vol_before: Vec<(u8, bool, Millis)>,
     snapshot: Option<Box<dyn Snapshot>>,
@@ -988,6 +989,7 @@ impl App {
             plugged_face: None,
             binding_faces: HashMap::new(),
             carousel: CarouselKeys::default(),
+            carousel_view: CarouselView::default(),
             shortcuts: ShortcutKeys::default(),
             vol_before: Vec::new(),
             snapshot: None,
@@ -1091,6 +1093,8 @@ impl App {
         app.romm = crate::romm::RommConf::load(root);
         app.gifts = crate::romm::Gifts::load(root);
         app.carousel = read_carousel(root);
+        app.carousel_view = slot_store::read_carousel_view(root);
+        app.apply_carousel_view();
         app.shortcuts = read_shortcuts(root);
         app.controls = read_controls(root);
         app.restock_recents();
@@ -1655,6 +1659,10 @@ impl App {
                 QuickValue::Show
             } else {
                 QuickValue::Hide
+            }),
+            QuickRow::BoxView => Some(match self.carousel_view {
+                CarouselView::Boxes => QuickValue::On,
+                CarouselView::Cartridges => QuickValue::Off,
             }),
             QuickRow::WallpaperTint => Some(match self.state.wallpaper_tint {
                 WallpaperTint::Off => QuickValue::Off,
@@ -2344,7 +2352,17 @@ impl App {
             .collect()
     }
 
+    fn apply_carousel_view(&mut self) {
+        let enabled = self.carousel_view == CarouselView::Boxes;
+        for (_, shelf) in &mut self.shelves {
+            shelf.set_box_view(enabled);
+        }
+    }
+
     pub fn box_face_wants(&self) -> Vec<FaceWant> {
+        if self.carousel_view == CarouselView::Cartridges {
+            return Vec::new();
+        }
         let here = self.shelf();
         let screen = here.on_screen();
         let mut wants: Vec<(usize, usize)> = screen.iter().map(|i| (self.shelf_at, *i)).collect();
@@ -2414,7 +2432,9 @@ impl App {
         let neighbours = self.neighbour_shelves();
         let mut shed = Vec::new();
         for (at, (_, shelf)) in self.shelves.iter_mut().enumerate() {
-            let keep = if at == self.shelf_at {
+            let keep = if self.carousel_view == CarouselView::Cartridges {
+                Vec::new()
+            } else if at == self.shelf_at {
                 shelf.around(FACE_KEEP)
             } else if neighbours.contains(&at) {
                 shelf.on_screen()
@@ -3869,6 +3889,7 @@ impl App {
             | QuickRow::Theme
             | QuickRow::Recents
             | QuickRow::ShowTitles
+            | QuickRow::BoxView
             | QuickRow::Wallpaper
             | QuickRow::WallpaperTint
             | QuickRow::Resume
@@ -4052,6 +4073,16 @@ impl App {
             self.persist();
             return;
         }
+        if row == QuickRow::BoxView {
+            self.carousel_view = self.carousel_view.toggle();
+            self.apply_carousel_view();
+            if let Some(root) = &self.root {
+                if let Err(e) = slot_store::write_carousel_view(root, self.carousel_view) {
+                    eprintln!("slot: carousel_view: {e}");
+                }
+            }
+            return;
+        }
         if row == QuickRow::LidOff {
             let n = LID_OFF_MIN.len();
             let at = LID_OFF_MIN
@@ -4144,6 +4175,7 @@ impl App {
             | QuickRow::Wallpaper
             | QuickRow::Recents
             | QuickRow::ShowTitles
+            | QuickRow::BoxView
             | QuickRow::DateTime
             | QuickRow::About
             | QuickRow::Screen
@@ -4220,6 +4252,7 @@ impl App {
             | QuickRow::ControlsShelf
             | QuickRow::ControlsInGame
             | QuickRow::LidOff
+            | QuickRow::BoxView
             | QuickRow::FetchArt
             | QuickRow::Network
             | QuickRow::Wifi
