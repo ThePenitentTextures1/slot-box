@@ -8,7 +8,7 @@ use crate::silhouette::GbShell;
 use crate::slot_chrome::{draw_empty_slot, MOUTH_H};
 
 const SIDE_SCALE: f32 = 0.78;
-const BOX_VIEW_SCALE: f32 = 0.45;
+pub const BOX_VIEW_SCALE: f32 = 0.45;
 const BOX_PIXELS_PER_MM: f32 = (360.0 / 60.0 + 212.0 / 35.0 + 312.0 / 57.0 + 337.0 / 65.5) / 4.0;
 const SIDE_ALPHA: f32 = 1.0;
 
@@ -28,7 +28,7 @@ pub fn foot_y(h: f32) -> f32 {
 }
 
 /// Returns physical front width/height and spine width at one shared Box View scale.
-fn box_dimensions(cart: &Cart, japanese: bool) -> (f32, f32, f32) {
+pub fn box_view_dimensions(cart: &Cart, japanese: bool) -> (f32, f32, f32) {
     let (front_width_mm, front_height_mm, depth_mm) = match cart.platform {
         Platform::Gba | Platform::Gbav if japanese => (90.0, 138.0, 24.0),
         Platform::Gba | Platform::Gbav => (125.0, 125.0, 24.0),
@@ -464,9 +464,17 @@ impl Shelf {
     }
 
     pub fn selected_at(&self, canvas: Canvas) -> (f32, f32) {
-        let (w, _) = self.slot_width(0);
+        // Cartridge insertion and the core picker retain vanilla cartridge geometry even
+        // when the selected shelf item itself is rendered as a box.
+        let width = self
+            .cart_at_offset(0)
+            .map(|i| match self.carts[i].platform {
+                Platform::Gba | Platform::Gbav => CART_W,
+                platform => cart_box(platform).0,
+            })
+            .unwrap_or(CART_W) as f32;
         let scale = shrink(self.scroll_target() - self.scroll);
-        (self.centre(canvas, 0) - w * scale / 2.0, scale)
+        (self.centre(canvas, 0) - width * scale / 2.0, scale)
     }
 
     fn slot_width(&self, slot: i32) -> (f32, bool) {
@@ -476,7 +484,7 @@ impl Shelf {
         let cart = &self.carts[index];
         if self.box_view {
             if let Some(faces) = self.box_faces(index) {
-                let (front_w, _, side_w) = box_dimensions(cart, faces.japanese);
+                let (front_w, _, side_w) = box_view_dimensions(cart, faces.japanese);
                 return (
                     (if slot == 0 { front_w } else { side_w }) * BOX_VIEW_SCALE,
                     false,
@@ -649,7 +657,7 @@ impl Shelf {
                 scale
             };
             let (w, h) = if let Some(faces) = box_faces {
-                let (front_w, front_h, side_w) = box_dimensions(cart, faces.japanese);
+                let (front_w, front_h, side_w) = box_view_dimensions(cart, faces.japanese);
                 if slot == 0 {
                     (front_w * object_scale, front_h * object_scale)
                 } else {
