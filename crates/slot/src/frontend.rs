@@ -45,6 +45,7 @@ pub struct Frontend {
     title_tex: Option<TexId>,
     faces: FaceBuilder,
     cart_faces: CartFaces,
+    box_faces: crate::box_faces::BoxFaces,
     rebuild: Option<Rebuild>,
     stale_check: Option<std::sync::mpsc::Receiver<Vec<slot_store::Cart>>>,
     ui_faces: Option<std::sync::mpsc::Receiver<UiFaces>>,
@@ -496,6 +497,7 @@ impl Frontend {
     pub fn boot_with(platform: Box<dyn Platform>, sink: Box<dyn crate::audio::AudioSink>) -> Self {
         let now = Instant::now();
         let cart_faces = CartFaces::spawn(platform.root().to_path_buf());
+        let box_faces = crate::box_faces::BoxFaces::spawn(platform.root().to_path_buf());
         save_headers_when_changed(platform.root().to_path_buf());
         let lid_root = platform.root().to_path_buf();
         let mut session = Session::boot_with(platform.root().to_path_buf(), sink);
@@ -537,6 +539,7 @@ impl Frontend {
             title_tex: None,
             faces: FaceBuilder::spawn(lid_root),
             cart_faces,
+            box_faces,
             rebuild: None,
             stale_check,
             ui_faces: None,
@@ -600,6 +603,7 @@ impl Frontend {
         crate::boot_time::mark("paper");
         if self.rebuild.is_none() {
             self.cart_faces.sync(self.session.app_mut(), compositor);
+            self.box_faces.sync(self.session.app_mut(), compositor);
         }
         crate::boot_time::mark("cart faces");
         let (tx, rx) = std::sync::mpsc::channel();
@@ -1026,6 +1030,7 @@ impl Frontend {
             crate::latency::taken();
         }
         self.cart_faces.sync(self.session.app_mut(), compositor);
+        self.box_faces.sync(self.session.app_mut(), compositor);
         sync_clock(self.session.app_mut(), compositor, &mut self.clocks);
         sync_binding_faces(self.session.app_mut(), compositor);
         sync_about(self.session.app_mut(), compositor, &mut self.about);
