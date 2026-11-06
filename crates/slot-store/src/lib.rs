@@ -52,6 +52,6 @@ pub use slot_state::{
     LID_OFF_MIN, RECENTS_MAX, SATURATION_MAX, SUNLIGHT_MAX, VOLUME_MAX,
 };
 pub use stamp::{
-    civil_from_days, days_in_month, days_in_year, days_in_month, format_stamp, parse_stamp, stamp_now,
+    civil_from_days, days_from_civil, days_in_month, format_stamp, parse_stamp, stamp_now,
 };
 pub use zone::Zone;
