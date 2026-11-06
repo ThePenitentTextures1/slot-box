@@ -5,7 +5,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 
 use slot_gfx::{Compositor, TexId};
-use slot_store::{box_art, box_art_file, BoxArtSource, Cart, TexturePanel};
+use slot_store::{box_art, box_art_file, BoxArtSource, Cart};
 use slot_ui::{BoxFaceTextures, CartFace};
 
 use crate::app::{App, FaceWant};
