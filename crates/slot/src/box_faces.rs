@@ -12,7 +12,6 @@ use crate::app::{App, FaceWant};
 
 const WORKERS: usize = 2;
 type Key = (usize, usize);
-type Built = (Key, CartFace, CartFace, CartFace, [f32; 2], [f32; 2]);
 
 struct JobQueue {
     jobs: VecDeque<(Key, Cart)>,
