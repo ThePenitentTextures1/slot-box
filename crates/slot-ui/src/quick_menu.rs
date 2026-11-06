@@ -28,6 +28,7 @@ pub enum QuickRow {
     Wallpaper,
     Recents,
     ShowTitles,
+    BoxView,
     WallpaperTint,
     GbcShader,
     GbcColourCorrection,
@@ -135,7 +136,7 @@ pub enum QuickRow {
 }
 
 impl QuickRow {
-    pub const ALL: [QuickRow; 123] = [
+    pub const ALL: [QuickRow; 124] = [
         QuickRow::FastForward,
         QuickRow::FastForwardSound,
         QuickRow::Screen,
@@ -155,6 +156,7 @@ impl QuickRow {
         QuickRow::Wallpaper,
         QuickRow::Recents,
         QuickRow::ShowTitles,
+        QuickRow::BoxView,
         QuickRow::WallpaperTint,
         QuickRow::GbcShader,
         QuickRow::GbcColourCorrection,
@@ -270,12 +272,13 @@ impl QuickRow {
         QuickRow::About,
     ];
 
-    pub const GENERAL: [QuickRow; 8] = [
+    pub const GENERAL: [QuickRow; 9] = [
         QuickRow::Theme,
         QuickRow::Wallpaper,
         QuickRow::WallpaperTint,
         QuickRow::Recents,
         QuickRow::ShowTitles,
+        QuickRow::BoxView,
         QuickRow::LidOff,
         QuickRow::DateTime,
         QuickRow::Wifi,
@@ -499,6 +502,7 @@ impl QuickRow {
             | QuickRow::Theme
             | QuickRow::Recents
             | QuickRow::ShowTitles
+            | QuickRow::BoxView
             | QuickRow::LidOff
             | QuickRow::Wifi => &QuickRow::GENERAL,
             QuickRow::WifiPower | QuickRow::Networks => &QuickRow::WIFI,
@@ -654,6 +658,7 @@ impl QuickRow {
             QuickRow::Wallpaper => "Wallpaper",
             QuickRow::Recents => "Recents",
             QuickRow::ShowTitles => "Game Titles",
+            QuickRow::BoxView => "Box View",
             QuickRow::WallpaperTint => "Wallpaper Tint",
             QuickRow::Resume => "Resume",
             QuickRow::UndoSave => "Undo Save",
