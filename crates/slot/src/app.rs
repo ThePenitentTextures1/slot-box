@@ -2344,8 +2344,41 @@ impl App {
             .collect()
     }
 
+    pub fn box_face_wants(&self) -> Vec<FaceWant> {
+        let here = self.shelf();
+        let screen = here.on_screen();
+        let mut wants: Vec<(usize, usize)> = screen.iter().map(|i| (self.shelf_at, *i)).collect();
+        for at in self.neighbour_shelves() {
+            wants.extend(self.shelves[at].1.on_screen().into_iter().map(|i| (at, i)));
+        }
+        wants.extend(
+            here.around(FACE_AHEAD)
+                .into_iter()
+                .filter(|i| !screen.contains(i))
+                .map(|i| (self.shelf_at, i)),
+        );
+        wants
+            .into_iter()
+            .filter(|(at, i)| !self.shelves[*at].1.box_checked(*i))
+            .map(|(shelf, index)| FaceWant {
+                shelf,
+                index,
+                on_screen: shelf == self.shelf_at && screen.contains(&index),
+            })
+            .collect()
+    }
+
     pub fn face_cart(&self, shelf: usize, index: usize) -> Option<&Cart> {
         self.shelves.get(shelf)?.1.carts.get(index)
+    }
+
+    pub fn set_box_faces(
+        &mut self,
+        shelf: usize,
+        index: usize,
+        faces: Option<slot_ui::BoxFaceTextures>,
+    ) -> Option<slot_ui::BoxFaceTextures> {
+        self.shelves.get_mut(shelf)?.1.set_box_faces(index, faces)
     }
 
     pub fn set_cart_face(&mut self, shelf: usize, index: usize, tex: TexId) -> Option<TexId> {
@@ -2371,6 +2404,28 @@ impl App {
                 if !keep.contains(&i) {
                     shed.extend(shelf.take_face(i));
                     shed.extend(shelf.take_interior(i));
+                }
+            }
+        }
+        shed
+    }
+
+    pub fn shed_box_faces(&mut self) -> Vec<TexId> {
+        let neighbours = self.neighbour_shelves();
+        let mut shed = Vec::new();
+        for (at, (_, shelf)) in self.shelves.iter_mut().enumerate() {
+            let keep = if at == self.shelf_at {
+                shelf.around(FACE_KEEP)
+            } else if neighbours.contains(&at) {
+                shelf.on_screen()
+            } else {
+                Vec::new()
+            };
+            for i in 0..shelf.carts.len() {
+                if !keep.contains(&i) {
+                    if let Some(faces) = shelf.take_box_faces(i) {
+                        shed.extend([faces.front, faces.side, faces.back]);
+                    }
                 }
             }
         }
