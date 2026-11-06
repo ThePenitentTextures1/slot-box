@@ -67,6 +67,7 @@ struct BoxFaceArt {
     back: CartFace,
     pivot: [f32; 2],
     front_center: [f32; 2],
+    japanese: bool,
 }
 
 impl BoxFaces {
@@ -163,6 +164,7 @@ impl BoxFaces {
                 front_size: (art.front.w, art.front.h),
                 side_size: (art.side.w, art.side.h),
                 back_size: (art.back.w, art.back.h),
+                japanese: art.japanese,
                 pivot: art.pivot,
                 front_center: art.front_center,
             }
@@ -205,23 +207,64 @@ fn work(queue: &Shared, outbox: &Sender<(Key, Option<BoxFaceArt>)>, root: &Path)
 
 fn build(root: &Path, cart: &Cart) -> Option<BoxFaceArt> {
     let art = box_art(root, cart)?;
-    if art.source == BoxArtSource::Texture {
-        return load_texture_atlas(&art.back.path);
-    }
-    let separate = Some((
-        slot_ui::decode_png(&art.front.path),
-        slot_ui::decode_png(&art.side.path),
-        slot_ui::decode_png(&art.back.path),
-    ));
-    if let Some((Some(front), Some(side), Some(back))) = separate {
-        if let Some(art) = assemble(front, side, back) {
-            return Some(art);
+    let mut faces = if art.source == BoxArtSource::Texture {
+        load_texture_atlas(&art.back.path)
+    } else {
+        let separate = (
+            slot_ui::decode_png(&art.front.path),
+            slot_ui::decode_png(&art.side.path),
+            slot_ui::decode_png(&art.back.path),
+        );
+        if let (Some(front), Some(side), Some(back)) = separate {
+            assemble(front, side, back)
+        } else {
+            None
         }
+    };
+
+    if faces.is_none() {
+        // A corrupt or unreadable separate set does not hide a usable atlas.
+        let texture = box_art_file(root, cart, "texture")?;
+        faces = load_texture_atlas(&texture);
     }
 
-    // A corrupt or unreadable separate set does not hide a usable atlas.
-    let texture = box_art_file(root, cart, "texture")?;
-    load_texture_atlas(&texture)
+    let mut faces = faces?;
+    faces.japanese = is_japanese_release(cart);
+    Some(faces)
+}
+
+fn is_japanese_release(cart: &Cart) -> bool {
+    if is_japanese_stem(&cart.stem) {
+        return true;
+    }
+    match cart.platform {
+        slot_store::Platform::Gb | slot_store::Platform::Gbc => {
+            slot_store::header_index::gb_header(&cart.rom).is_some_and(|header| header.japan)
+        }
+        slot_store::Platform::Gba | slot_store::Platform::Gbav => {
+            slot_store::header_index::gba_code(&cart.rom).ends_with('J')
+        }
+    }
+}
+
+fn is_japanese_stem(stem: &str) -> bool {
+    let lower = stem.to_ascii_lowercase();
+    lower
+        .split(['(', '['])
+        .skip(1)
+        .map(|part| part.split([')', ']']).next().unwrap_or("").trim())
+        .any(|tag| {
+            tag == "japan"
+                || tag.starts_with("japan,")
+                || tag == "japanese"
+                || tag.starts_with("japanese,")
+                || tag == "jpn"
+                || tag.starts_with("jpn,")
+                || tag == "jp"
+                || tag.starts_with("jp,")
+                || tag == "j"
+                || tag.starts_with("j,")
+        })
 }
 
 fn assemble(
@@ -241,6 +284,7 @@ fn assemble(
         back: CartFace { rgba: back, w: bw, h: bh },
         pivot: [pivot_x, fh as f32 / 2.0],
         front_center: [pivot_x + front_width / 2.0, fh as f32 / 2.0],
+        japanese: false,
     })
 }
 
@@ -263,6 +307,7 @@ fn load_texture_atlas(path: &Path) -> Option<BoxFaceArt> {
         back: CartFace { rgba: back, w: face_w, h },
         pivot: [(face_w + side_w) as f32, h as f32 / 2.0],
         front_center: [(face_w + side_w) as f32 + face_w as f32 / 2.0, h as f32 / 2.0],
+        japanese: false,
     })
 }
 
