@@ -33,7 +33,7 @@ fn box_dimensions(cart: &Cart, japanese: bool) -> (f32, f32, f32) {
         Platform::Gba | Platform::Gbav if japanese => (90.0, 138.0, 24.0),
         Platform::Gba | Platform::Gbav => (125.0, 125.0, 24.0),
         Platform::Gb | Platform::Gbc if japanese => (100.0, 124.0, 22.0),
-        Platform::Gb | Platform::Gbc => (130.0, 130.0, 28.0),
+        Platform::Gb | Platform::Gbc => (125.0, 125.0, 28.0),
     };
     (
         front_width_mm * BOX_PIXELS_PER_MM,
