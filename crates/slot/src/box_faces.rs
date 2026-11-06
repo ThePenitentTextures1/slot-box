@@ -5,7 +5,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 
 use slot_gfx::{Compositor, TexId};
-use slot_store::{box_art, box_art_path, BoxArtSource, Cart, TexturePanel};
+use slot_store::{box_art, box_art_file, BoxArtSource, Cart, TexturePanel};
 use slot_ui::{BoxFaceTextures, CartFace};
 
 use crate::app::{App, FaceWant};
@@ -215,11 +215,13 @@ fn build(root: &Path, cart: &Cart) -> Option<BoxFaceArt> {
         slot_ui::decode_png(&art.back.path),
     ));
     if let Some((Some(front), Some(side), Some(back))) = separate {
-        return assemble(front, side, back);
+        if let Some(art) = assemble(front, side, back) {
+            return Some(art);
+        }
     }
 
     // A corrupt or unreadable separate set does not hide a usable atlas.
-    let texture = box_art_path(root, cart, "texture");
+    let texture = box_art_file(root, cart, "texture")?;
     load_texture_atlas(&texture)
 }
 
