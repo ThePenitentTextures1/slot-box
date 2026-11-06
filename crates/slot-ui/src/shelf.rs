@@ -8,6 +8,7 @@ use crate::silhouette::GbShell;
 use crate::slot_chrome::{draw_empty_slot, MOUTH_H};
 
 const SIDE_SCALE: f32 = 0.78;
+const BOX_VIEW_SCALE: f32 = 0.45;
 const SIDE_ALPHA: f32 = 1.0;
 
 pub fn rest_y(h: f32) -> f32 {
@@ -23,6 +24,44 @@ pub fn rest_y(h: f32) -> f32 {
 
 pub fn foot_y(h: f32) -> f32 {
     rest_y(h) + h
+}
+
+/// Returns the physical front width/height and spine width in the shelf's cartridge-pixel units.
+fn box_dimensions(cart: &Cart) -> (f32, f32, f32) {
+    let japanese = is_japanese_release(&cart.stem);
+    let (cart_width_mm, cart_height_mm, front_width_mm, front_height_mm, depth_mm) =
+        match cart.platform {
+            Platform::Gba | Platform::Gbav if japanese => (60.0, 35.0, 90.0, 138.0, 24.0),
+            Platform::Gba | Platform::Gbav => (60.0, 35.0, 125.0, 125.0, 24.0),
+            Platform::Gb | Platform::Gbc if japanese => (57.0, 65.5, 100.0, 124.0, 22.0),
+            Platform::Gb | Platform::Gbc => (57.0, 65.5, 130.0, 130.0, 28.0),
+        };
+    let (cart_width_px, cart_height_px) = cart_box(cart.platform);
+    (
+        cart_width_px as f32 * front_width_mm / cart_width_mm,
+        cart_height_px as f32 * front_height_mm / cart_height_mm,
+        cart_width_px as f32 * depth_mm / cart_width_mm,
+    )
+}
+
+fn is_japanese_release(stem: &str) -> bool {
+    let lower = stem.to_ascii_lowercase();
+    lower
+        .split(['(', '['])
+        .skip(1)
+        .map(|part| part.split([')', ']']).next().unwrap_or("").trim())
+        .any(|tag| {
+            tag == "japan"
+                || tag.starts_with("japan,")
+                || tag == "japanese"
+                || tag.starts_with("japanese,")
+                || tag == "jpn"
+                || tag.starts_with("jpn,")
+                || tag == "jp"
+                || tag.starts_with("jp,")
+                || tag == "j"
+                || tag.starts_with("j,")
+        })
 }
 
 pub fn box_size(platform: Platform) -> (u32, u32) {
@@ -440,9 +479,25 @@ impl Shelf {
     }
 
     fn slot_width(&self, slot: i32) -> (f32, bool) {
-        match self.cart_at_offset(slot).map(|i| self.carts[i].platform) {
-            Some(Platform::Gba | Platform::Gbav) | None => (CART_W as f32, true),
-            Some(p) => (cart_box(p).0 as f32, false),
+        let Some(index) = self.cart_at_offset(slot) else {
+            return (CART_W as f32, true);
+        };
+        let cart = &self.carts[index];
+        if self.box_view {
+            if self.box_faces(index).is_some() {
+                let (front_w, _, side_w) = box_dimensions(cart);
+                return (
+                    (if slot == 0 { front_w } else { side_w }) * BOX_VIEW_SCALE,
+                    false,
+                );
+            }
+            let (width, _) = cart_box(cart.platform);
+            let scale = if slot == 0 { 1.0 } else { BOX_VIEW_SCALE };
+            return (width as f32 * scale, false);
+        }
+        match cart.platform {
+            Platform::Gba | Platform::Gbav => (CART_W as f32, true),
+            p => (cart_box(p).0 as f32, false),
         }
     }
 
@@ -588,14 +643,37 @@ impl Shelf {
             let scale = shrink(offset);
             let alpha = (1.0 + (SIDE_ALPHA - 1.0) * t) * (1.0 - recede);
             let (cw, ch) = cart_box(cart.platform);
-            let (w, h) = (cw as f32 * scale, ch as f32 * scale);
+            let box_faces = if self.box_view {
+                self.box_faces(i)
+            } else {
+                None
+            };
+            let object_scale = if self.box_view && (box_faces.is_some() || slot != 0) {
+                BOX_VIEW_SCALE * scale
+            } else {
+                scale
+            };
+            let (w, h) = if box_faces.is_some() {
+                let (front_w, front_h, side_w) = box_dimensions(cart);
+                if slot == 0 {
+                    (front_w * object_scale, front_h * object_scale)
+                } else {
+                    (side_w * object_scale, front_h * object_scale)
+                }
+            } else {
+                (cw as f32 * object_scale, ch as f32 * object_scale)
+            };
             let away = offset.signum() * (1.0 + offset.abs());
             let x = self.centre(canvas, slot) - w / 2.0 + away * PART * recede;
             if x + w <= 0.0 || x >= canvas.w || alpha <= 0.0 {
                 continue;
             }
             let x = x + shake;
-            let y = foot_y(ch as f32) - h;
+            let y = if box_faces.is_some() {
+                (OUT_H as f32 - h) / 2.0
+            } else {
+                foot_y(ch as f32) - h
+            };
             if let Some(tex) = self.wrapped(i) {
                 let (bw, bh) = box_size(cart.platform);
                 let (bw, bh) = (bw as f32 * scale, bh as f32 * scale);
@@ -609,27 +687,27 @@ impl Shelf {
                 });
                 continue;
             }
-            if self.box_view {
-                if let Some(box_faces) = self.box_faces(i) {
-                    let (tex, (iw, ih)) = if slot == 0 {
-                        (box_faces.front, box_faces.front_size)
-                    } else {
-                        (box_faces.side, box_faces.side_size)
-                    };
-                    if iw > 0 && ih > 0 {
-                        let h = ch as f32 * scale;
-                        let w = h * iw as f32 / ih as f32;
-                        let cx = self.centre(canvas, slot) + shake;
-                        out.push(Draw::Tex {
-                            x: cx - w / 2.0,
-                            y: foot_y(ch as f32) - h,
-                            w,
-                            h,
-                            tex,
-                            alpha: alpha * dim,
-                        });
-                        continue;
-                    }
+            if let Some(box_faces) = box_faces {
+                if slot == 0 && box_faces.front_size.0 > 0 && box_faces.front_size.1 > 0 {
+                    out.push(Draw::Tex {
+                        x,
+                        y,
+                        w,
+                        h,
+                        tex: box_faces.front,
+                        alpha: alpha * dim,
+                    });
+                    continue;
+                } else if slot != 0 && box_faces.side_size.0 > 0 && box_faces.side_size.1 > 0 {
+                    out.push(Draw::Tex {
+                        x,
+                        y,
+                        w,
+                        h,
+                        tex: box_faces.side,
+                        alpha: alpha * dim,
+                    });
+                    continue;
                 }
             }
             if alpha < 1.0 {
