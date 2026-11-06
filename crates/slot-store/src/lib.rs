@@ -8,6 +8,7 @@ macro_rules! eprintln {
 mod atomic;
 mod bindings;
 pub mod boxes;
+pub mod carousel_view;
 pub mod cart_shell;
 mod config;
 mod core;
@@ -35,6 +36,7 @@ pub use boxes::{
     box_art, box_art_file, box_art_path, box_dir, box_root, BoxArt, BoxArtImage, BoxArtSource,
     TexturePanel,
 };
+pub use carousel_view::{read as read_carousel_view, write as write_carousel_view, CarouselView};
 pub use cart_shell::{Outline, ShellChoice, ShellFinish, CART_SHELL_FILE, LABELS_SHELL_FILE};
 pub use config::{move_config, CONFIG_DIR};
 pub use core::{
