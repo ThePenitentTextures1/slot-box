@@ -2432,7 +2432,10 @@ impl App {
     }
 
     fn box_input(&mut self, action: Action) -> bool {
-        if !self.on_shelf() || self.carousel_view != CarouselView::Boxes {
+        if !self.on_shelf()
+            || self.carousel_view != CarouselView::Boxes
+            || self.core_picker.is_some()
+        {
             return false;
         }
         if self.box_scene != BoxScene::Carousel && self.selected_box().is_none() {
@@ -2521,6 +2524,7 @@ impl App {
                     true
                 }
                 Action::GbaDown(Btn::A) | Action::Insert if item == BoxItem::Box => true,
+                Action::GbaDown(Btn::Start) | Action::SelectTap if item == BoxItem::Box => true,
                 _ => false,
             },
             _ => false,
