@@ -27,8 +27,7 @@ pub fn foot_y(h: f32) -> f32 {
 }
 
 /// Returns the physical front width/height and spine width in the shelf's cartridge-pixel units.
-fn box_dimensions(cart: &Cart) -> (f32, f32, f32) {
-    let japanese = is_japanese_release(&cart.stem);
+fn box_dimensions(cart: &Cart, japanese: bool) -> (f32, f32, f32) {
     let (cart_width_mm, cart_height_mm, front_width_mm, front_height_mm, depth_mm) =
         match cart.platform {
             Platform::Gba | Platform::Gbav if japanese => (60.0, 35.0, 90.0, 138.0, 24.0),
@@ -44,25 +43,6 @@ fn box_dimensions(cart: &Cart) -> (f32, f32, f32) {
     )
 }
 
-fn is_japanese_release(stem: &str) -> bool {
-    let lower = stem.to_ascii_lowercase();
-    lower
-        .split(['(', '['])
-        .skip(1)
-        .map(|part| part.split([')', ']']).next().unwrap_or("").trim())
-        .any(|tag| {
-            tag == "japan"
-                || tag.starts_with("japan,")
-                || tag == "japanese"
-                || tag.starts_with("japanese,")
-                || tag == "jpn"
-                || tag.starts_with("jpn,")
-                || tag == "jp"
-                || tag.starts_with("jp,")
-                || tag == "j"
-                || tag.starts_with("j,")
-        })
-}
 
 pub fn box_size(platform: Platform) -> (u32, u32) {
     match platform {
@@ -95,6 +75,8 @@ pub struct BoxFaceTextures {
     pub front_size: (u32, u32),
     pub side_size: (u32, u32),
     pub back_size: (u32, u32),
+    /// Whether the ROM identifies a Japanese release.
+    pub japanese: bool,
     /// Pivot at the spine/front seam in the flattened net's pixel coordinates.
     pub pivot: [f32; 2],
     /// Front-face center in the flattened net's pixel coordinates.
@@ -484,8 +466,8 @@ impl Shelf {
         };
         let cart = &self.carts[index];
         if self.box_view {
-            if self.box_faces(index).is_some() {
-                let (front_w, _, side_w) = box_dimensions(cart);
+            if let Some(faces) = self.box_faces(index) {
+                let (front_w, _, side_w) = box_dimensions(cart, faces.japanese);
                 return (
                     (if slot == 0 { front_w } else { side_w }) * BOX_VIEW_SCALE,
                     false,
@@ -654,7 +636,8 @@ impl Shelf {
                 scale
             };
             let (w, h) = if box_faces.is_some() {
-                let (front_w, front_h, side_w) = box_dimensions(cart);
+                let (front_w, front_h, side_w) =
+                    box_dimensions(cart, box_faces.is_some_and(|faces| faces.japanese));
                 if slot == 0 {
                     (front_w * object_scale, front_h * object_scale)
                 } else {
