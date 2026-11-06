@@ -214,7 +214,7 @@ impl Shelf {
     ) -> Option<BoxFaceTextures> {
         let checked = self.box_checked.get_mut(i)?;
         *checked = true;
-        Some(std::mem::replace(self.box_faces.get_mut(i)?, faces)).flatten()
+        Some(self.box_faces.get_mut(i)?).map(|slot| std::mem::replace(slot, faces)).flatten()
     }
 
     pub fn take_box_faces(&mut self, i: usize) -> Option<BoxFaceTextures> {
