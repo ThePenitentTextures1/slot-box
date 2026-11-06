@@ -23,6 +23,7 @@ mod shots;
 mod slot_state;
 mod stamp;
 mod zone;
+pub mod carousel_view;
 
 pub use atomic::{atomic_write, sweep_temps};
 pub use bindings::{
