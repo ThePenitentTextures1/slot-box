@@ -32,7 +32,8 @@ pub use bindings::{
     ShortcutKeys,
 };
 pub use boxes::{
-    box_art, box_art_path, box_dir, box_root, BoxArt, BoxArtImage, BoxArtSource, TexturePanel,
+    box_art, box_art_file, box_art_path, box_dir, box_root, BoxArt, BoxArtImage, BoxArtSource,
+    TexturePanel,
 };
 pub use cart_shell::{Outline, ShellChoice, ShellFinish, CART_SHELL_FILE, LABELS_SHELL_FILE};
 pub use config::{move_config, CONFIG_DIR};
