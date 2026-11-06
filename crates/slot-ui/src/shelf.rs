@@ -207,10 +207,14 @@ impl Shelf {
         self.box_checked.get(i).copied().unwrap_or(true)
     }
 
-    pub fn set_box_faces(&mut self, i: usize, faces: Option<BoxFaceTextures>) -> Option<BoxFaceTextures> {
+    pub fn set_box_faces(
+        &mut self,
+        i: usize,
+        faces: Option<BoxFaceTextures>,
+    ) -> Option<BoxFaceTextures> {
         let checked = self.box_checked.get_mut(i)?;
         *checked = true;
-        self.box_faces.get_mut(i)?.replace(faces).flatten()
+        Some(std::mem::replace(self.box_faces.get_mut(i)?, faces)).flatten()
     }
 
     pub fn take_box_faces(&mut self, i: usize) -> Option<BoxFaceTextures> {
