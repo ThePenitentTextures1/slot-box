@@ -69,6 +69,7 @@ pub struct Shelf {
     faces: Vec<Option<TexId>>,
     box_faces: Vec<Option<BoxFaceTextures>>,
     box_checked: Vec<bool>,
+    box_view: bool,
     wrapped: Vec<Option<TexId>>,
     interiors: Vec<Option<TexId>>,
     shadow: Option<TexId>,
@@ -90,6 +91,7 @@ impl Shelf {
             faces: vec![None; carts.len()],
             box_faces: vec![None; carts.len()],
             box_checked: vec![false; carts.len()],
+            box_view: false,
             wrapped: vec![None; carts.len()],
             interiors: vec![None; carts.len()],
             hearted: vec![false; carts.len()],
@@ -142,6 +144,10 @@ impl Shelf {
         self.scroll = i as f32;
         self.ride = i as f32;
         self.vel = 0.0;
+    }
+
+    pub fn set_box_view(&mut self, enabled: bool) {
+        self.box_view = enabled;
     }
 
     pub fn set_heart(&mut self, face: TexId, w: u32, h: u32) {
@@ -603,7 +609,8 @@ impl Shelf {
                 });
                 continue;
             }
-            if let Some(box_faces) = self.box_faces(i) {
+            if self.box_view {
+                if let Some(box_faces) = self.box_faces(i) {
                 let (tex, (iw, ih)) = if slot == 0 {
                     (box_faces.front, box_faces.front_size)
                 } else {
@@ -622,6 +629,7 @@ impl Shelf {
                         alpha: alpha * dim,
                     });
                     continue;
+                }
                 }
             }
             if alpha < 1.0 {
