@@ -26,8 +26,8 @@ fn box_back(canvas: Canvas, faces: BoxFaceTextures, size: (f32,f32), out: &mut V
 /// Box-only insert entry point. Draws the box in its open-scene position and
 /// delegates cartridge/slot choreography to the supplied renderer.
 pub fn insert(canvas: Canvas, faces: BoxFaceTextures, size: (f32,f32), _progress: f32, out: &mut Vec<Draw>, draw_cart: impl FnOnce(&mut Vec<Draw>)) {
-    box_back(canvas,faces,size,out);
     draw_cart(out);
+    box_back(canvas,faces,size,out);
 }
 /// Box-only eject entry point, isolated from vanilla Cartridge View drawing.
 pub fn eject(canvas: Canvas, faces: BoxFaceTextures, size: (f32,f32), _progress: f32, out: &mut Vec<Draw>, draw_cart: impl FnOnce(&mut Vec<Draw>)) {
