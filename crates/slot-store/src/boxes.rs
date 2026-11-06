@@ -2,10 +2,27 @@ use std::path::{Path, PathBuf};
 
 use crate::{Cart, Platform};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BoxArtSource {
     Separate,
     Texture,
+}
+
+/// The panel of a texture image used for one box face.
+///
+/// Texture panels are laid out back, side, front from left to right.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TexturePanel {
+    Back,
+    Side,
+    Front,
+}
+
+/// A path to an image and, for texture sources, the panel to crop from it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BoxArtImage {
+    pub path: PathBuf,
+    pub texture_panel: Option<TexturePanel>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -13,19 +30,14 @@ pub struct BoxArt {
     pub platform: Platform,
     pub stem: String,
     pub source: BoxArtSource,
-    pub front: Option<PathBuf>,
-    pub side: Option<PathBuf>,
-    pub back: Option<PathBuf>,
-    pub texture: Option<PathBuf>,
+    pub front: BoxArtImage,
+    pub side: BoxArtImage,
+    pub back: BoxArtImage,
 }
 
 impl BoxArt {
     pub fn is_texture(&self) -> bool {
-        matches!(self.source, BoxArtSource::Texture)
-    }
-
-    pub fn has_parts(&self) -> bool {
-        self.front.is_some() && self.side.is_some() && self.back.is_some()
+        self.source == BoxArtSource::Texture
     }
 }
 
@@ -41,39 +53,65 @@ pub fn box_art_path(root: &Path, cart: &Cart, kind: &str) -> PathBuf {
     box_dir(root, cart.platform).join(format!("{}-{kind}.png", cart.stem))
 }
 
+/// Finds an asset by filename without depending on filesystem case sensitivity.
+fn find_art_file(dir: &Path, filename: &str) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    entries.flatten().find_map(|entry| {
+        let name = entry.file_name();
+        if name.to_str()?.eq_ignore_ascii_case(filename) && entry.path().is_file() {
+            Some(entry.path())
+        } else {
+            None
+        }
+    })
+}
+
+fn separate_image(path: PathBuf) -> BoxArtImage {
+    BoxArtImage {
+        path,
+        texture_panel: None,
+    }
+}
+
+fn texture_image(path: PathBuf, panel: TexturePanel) -> BoxArtImage {
+    BoxArtImage {
+        path,
+        texture_panel: Some(panel),
+    }
+}
+
+/// Resolves a game's box art from Boxes/<platform>/<rom-stem>-*.png.
+///
+/// A complete set of separate front/side/back images takes precedence. If
+/// that set is incomplete, a single texture image is used when present. The
+/// returned texture panels are ordered back, side, front from left to right.
+/// Missing art returns None, allowing the caller to show the loose cartridge.
 pub fn box_art(root: &Path, cart: &Cart) -> Option<BoxArt> {
     let dir = box_dir(root, cart.platform);
-    let separate = (
-        box_art_path(root, cart, "front"),
-        box_art_path(root, cart, "side"),
-        box_art_path(root, cart, "back"),
-    );
-    if separate.0.is_file() && separate.1.is_file() && separate.2.is_file() {
+    let front = find_art_file(&dir, &format!("{}-front.png", cart.stem));
+    let side = find_art_file(&dir, &format!("{}-side.png", cart.stem));
+    let back = find_art_file(&dir, &format!("{}-back.png", cart.stem));
+
+    if let (Some(front), Some(side), Some(back)) = (front, side, back) {
         return Some(BoxArt {
             platform: cart.platform,
             stem: cart.stem.clone(),
             source: BoxArtSource::Separate,
-            front: Some(separate.0),
-            side: Some(separate.1),
-            back: Some(separate.2),
-            texture: None,
+            front: separate_image(front),
+            side: separate_image(side),
+            back: separate_image(back),
         });
     }
 
-    let texture = box_art_path(root, cart, "texture");
-    if texture.is_file() {
-        return Some(BoxArt {
-            platform: cart.platform,
-            stem: cart.stem.clone(),
-            source: BoxArtSource::Texture,
-            front: None,
-            side: None,
-            back: None,
-            texture: Some(texture),
-        });
-    }
-
-    None
+    let texture = find_art_file(&dir, &format!("{}-texture.png", cart.stem))?;
+    Some(BoxArt {
+        platform: cart.platform,
+        stem: cart.stem.clone(),
+        source: BoxArtSource::Texture,
+        front: texture_image(texture.clone(), TexturePanel::Front),
+        side: texture_image(texture.clone(), TexturePanel::Side),
+        back: texture_image(texture, TexturePanel::Back),
+    })
 }
 
 #[cfg(test)]
@@ -93,39 +131,70 @@ mod tests {
         }
     }
 
+    fn write_art(root: &Path, stem: &str, kind: &str) -> PathBuf {
+        let path = box_dir(root, Platform::Gba).join(format!("{stem}-{kind}.png"));
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"image fixture").unwrap();
+        path
+    }
+
     #[test]
     fn separate_box_files_are_preferred() {
         let d = tempfile::tempdir().unwrap();
         let c = cart(Platform::Gba, "mario");
-        let dir = box_dir(d.path(), c.platform);
-        fs::create_dir_all(&dir).unwrap();
-        for name in ["front", "side", "back", "texture"] {
-            let path = dir.join(format!("mario-{name}.png"));
-            fs::write(path, b"png").unwrap();
-        }
+        let front = write_art(d.path(), "mario", "front");
+        let side = write_art(d.path(), "mario", "side");
+        let back = write_art(d.path(), "mario", "back");
+        write_art(d.path(), "mario", "texture");
 
         let art = box_art(d.path(), &c).unwrap();
         assert_eq!(art.source, BoxArtSource::Separate);
-        assert_eq!(art.front.as_deref(), Some(dir.join("mario-front.png").as_path()));
-        assert_eq!(art.side.as_deref(), Some(dir.join("mario-side.png").as_path()));
-        assert_eq!(art.back.as_deref(), Some(dir.join("mario-back.png").as_path()));
-        assert_eq!(art.texture, None);
+        assert_eq!(art.front, separate_image(front));
+        assert_eq!(art.side, separate_image(side));
+        assert_eq!(art.back, separate_image(back));
     }
 
     #[test]
-    fn a_texture_is_used_when_the_separate_files_are_missing() {
+    fn texture_is_mapped_to_back_side_front_panels() {
         let d = tempfile::tempdir().unwrap();
         let c = cart(Platform::Gba, "zelda");
-        let dir = box_dir(d.path(), c.platform);
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("zelda-texture.png"), b"png").unwrap();
+        let texture = write_art(d.path(), "zelda", "texture");
 
         let art = box_art(d.path(), &c).unwrap();
         assert_eq!(art.source, BoxArtSource::Texture);
-        assert_eq!(art.texture, Some(dir.join("zelda-texture.png")));
-        assert_eq!(art.front, None);
-        assert_eq!(art.side, None);
-        assert_eq!(art.back, None);
+        assert_eq!(art.front, texture_image(texture.clone(), TexturePanel::Front));
+        assert_eq!(art.side, texture_image(texture.clone(), TexturePanel::Side));
+        assert_eq!(art.back, texture_image(texture, TexturePanel::Back));
+    }
+
+    #[test]
+    fn incomplete_separate_set_falls_back_to_texture() {
+        let d = tempfile::tempdir().unwrap();
+        let c = cart(Platform::Gba, "zelda");
+        write_art(d.path(), "zelda", "front");
+        write_art(d.path(), "zelda", "side");
+        let texture = write_art(d.path(), "zelda", "texture");
+
+        let art = box_art(d.path(), &c).unwrap();
+        assert_eq!(art.source, BoxArtSource::Texture);
+        assert_eq!(art.front.path, texture);
+    }
+
+    #[test]
+    fn asset_filename_matching_is_case_insensitive() {
+        let d = tempfile::tempdir().unwrap();
+        let c = cart(Platform::Gba, "mario");
+        let front = box_dir(d.path(), Platform::Gba).join("MARIO-FRONT.PNG");
+        let side = box_dir(d.path(), Platform::Gba).join("MARIO-SIDE.PNG");
+        let back = box_dir(d.path(), Platform::Gba).join("MARIO-BACK.PNG");
+        fs::create_dir_all(front.parent().unwrap()).unwrap();
+        fs::write(&front, b"front").unwrap();
+        fs::write(&side, b"side").unwrap();
+        fs::write(&back, b"back").unwrap();
+
+        let art = box_art(d.path(), &c).unwrap();
+        assert_eq!(art.source, BoxArtSource::Separate);
+        assert_eq!(art.front.path, front);
     }
 
     #[test]
