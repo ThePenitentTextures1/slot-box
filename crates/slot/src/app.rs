@@ -22,6 +22,7 @@ use slot_ui::{
 };
 
 use crate::audio::Sfx;
+use crate::boxview;
 use crate::core_picker::{Chip, CorePicker, Outcome, Press};
 use crate::link_kind::{link_carried, link_dual, link_kind, serial_option, LinkKind};
 use crate::link_radio::{radio_jobs, LinkRole, RadioJob, RadioJobs};
@@ -5576,7 +5577,11 @@ impl App {
             return self.hud.draw(self.canvas(), self.now(), out);
         }
         if self.studio.is_some() && !matches!(self.phase, Phase::Doze { .. }) {
-            self.draw_studio(out);
+            if self.carousel_view == CarouselView::Boxes {
+                boxview::cartridge_studio(|| self.draw_studio(out));
+            } else {
+                self.draw_studio(out);
+            }
             return self.hud.draw(self.canvas(), self.now(), out);
         }
         if self.update.is_some() {
@@ -5649,17 +5654,24 @@ impl App {
                 self.draw_background(out);
                 match (self.core_picker_shown(), self.selected_stem()) {
                     (Some(picker), Some(stem)) => {
-                        let open = ease(picker.openness(self.now()));
-                        let dim = 1.0 + (CORE_PICKER_DIM - 1.0) * open;
-                        self.shelf().draw_row(
-                            self.canvas(),
-                            Some(stem),
-                            0.0,
-                            CORE_PICKER_RECEDE * open,
-                            dim,
-                            out,
-                        );
-                        draw_empty_slot(self.canvas(), self.slot_faces, out);
+                        let draw_picker = || {
+                            let open = ease(picker.openness(self.now()));
+                            let dim = 1.0 + (CORE_PICKER_DIM - 1.0) * open;
+                            self.shelf().draw_row(
+                                self.canvas(),
+                                Some(stem),
+                                0.0,
+                                CORE_PICKER_RECEDE * open,
+                                dim,
+                                out,
+                            );
+                            draw_empty_slot(self.canvas(), self.slot_faces, out);
+                        };
+                        if self.carousel_view == CarouselView::Boxes {
+                            boxview::emulator_picker(draw_picker);
+                        } else {
+                            draw_picker();
+                        }
                     }
                     _ => {
                         let box_scene_drawn = self.draw_box_scene(out);
@@ -5722,12 +5734,19 @@ impl App {
                 self.chrome(cart, 0.0, out);
             }
             Phase::Inserting { cart, resumed, .. } => {
-                if !resumed {
-                    self.draw_background(out);
-                    self.shelf()
-                        .draw_row(self.canvas(), Some(cart), 0.0, self.seat(), 1.0, out);
+                let draw_insert = || {
+                    if !resumed {
+                        self.draw_background(out);
+                        self.shelf()
+                            .draw_row(self.canvas(), Some(cart), 0.0, self.seat(), 1.0, out);
+                    }
+                    self.chrome(cart, 0.0, out);
+                };
+                if self.carousel_view == CarouselView::Boxes {
+                    boxview::insert(draw_insert);
+                } else {
+                    draw_insert();
                 }
-                self.chrome(cart, 0.0, out);
             }
             Phase::Ejecting { .. }
                 if self.framed_panel() && (self.shows_game() || self.screen > 0.0) =>
@@ -5738,10 +5757,17 @@ impl App {
                 self.draw_powering(out)
             }
             Phase::Ejecting { cart, .. } => {
-                self.draw_background(out);
-                self.shelf()
-                    .draw_row(self.canvas(), Some(cart), 0.0, self.seat(), 1.0, out);
-                self.chrome(cart, 0.0, out);
+                let draw_eject = || {
+                    self.draw_background(out);
+                    self.shelf()
+                        .draw_row(self.canvas(), Some(cart), 0.0, self.seat(), 1.0, out);
+                    self.chrome(cart, 0.0, out);
+                };
+                if self.carousel_view == CarouselView::Boxes {
+                    boxview::eject(draw_eject);
+                } else {
+                    draw_eject();
+                }
             }
             Phase::Playing { cart } if self.screen < 1.0 => {
                 self.draw_background(out);
