@@ -66,6 +66,12 @@ fn find_art_file(dir: &Path, filename: &str) -> Option<PathBuf> {
     })
 }
 
+/// Finds a named box-art image in a game's platform folder, case-insensitively.
+pub fn box_art_file(root: &Path, cart: &Cart, kind: &str) -> Option<PathBuf> {
+    let filename = format!("{}-{kind}.png", cart.stem);
+    find_art_file(&box_dir(root, cart.platform), &filename)
+}
+
 fn separate_image(path: PathBuf) -> BoxArtImage {
     BoxArtImage {
         path,
@@ -87,10 +93,9 @@ fn texture_image(path: PathBuf, panel: TexturePanel) -> BoxArtImage {
 /// returned texture panels are ordered back, side, front from left to right.
 /// Missing art returns None, allowing the caller to show the loose cartridge.
 pub fn box_art(root: &Path, cart: &Cart) -> Option<BoxArt> {
-    let dir = box_dir(root, cart.platform);
-    let front = find_art_file(&dir, &format!("{}-front.png", cart.stem));
-    let side = find_art_file(&dir, &format!("{}-side.png", cart.stem));
-    let back = find_art_file(&dir, &format!("{}-back.png", cart.stem));
+    let front = box_art_file(root, cart, "front");
+    let side = box_art_file(root, cart, "side");
+    let back = box_art_file(root, cart, "back");
 
     if let (Some(front), Some(side), Some(back)) = (front, side, back) {
         return Some(BoxArt {
@@ -103,7 +108,7 @@ pub fn box_art(root: &Path, cart: &Cart) -> Option<BoxArt> {
         });
     }
 
-    let texture = find_art_file(&dir, &format!("{}-texture.png", cart.stem))?;
+    let texture = box_art_file(root, cart, "texture")?;
     Some(BoxArt {
         platform: cart.platform,
         stem: cart.stem.clone(),
