@@ -137,7 +137,7 @@ fn media_for(value: &serde_json::Value) -> Option<(&'static str, String)> {
         }
     }
     if faces.iter().all(Option::is_some) { return Some(("faces", faces.into_iter().flatten().collect::<Vec<_>>().join("\n"))); }
-    texture.map(|u| ("texture", u)).or_else(|| front.map(|u| ("front", u)))
+    texture.map(|u| ("texture", u))
 }
 
 fn valid_png(bytes: &[u8]) -> bool {
@@ -196,3 +196,4 @@ pub fn fetch_missing(root: &Path, credentials: &Credentials) -> Result<FetchSumm
     }
     Ok(summary)
 }
+
