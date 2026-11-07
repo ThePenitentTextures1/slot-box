@@ -197,3 +197,47 @@ pub fn fetch_missing(root: &Path, credentials: &Credentials) -> Result<FetchSumm
     Ok(summary)
 }
 
+
+/// Progress notifications emitted by the background fetch worker.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WorkerEvent {
+    Started { total: usize },
+    Finished(Result<FetchSummary, FetchError>),
+}
+
+/// A dedicated box-art worker. Cancellation is checked between games; an active HTTP request
+/// is allowed to finish before the worker exits.
+pub struct Worker {
+    events: std::sync::mpsc::Receiver<WorkerEvent>,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Worker {
+    pub fn start(root: PathBuf, credentials: Credentials) -> Self {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::mpsc::channel;
+        use std::sync::Arc;
+        let (tx, events) = channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let stop = cancel.clone();
+        std::thread::spawn(move || {
+            let total = missing(&root).len();
+            let _ = tx.send(WorkerEvent::Started { total });
+            if stop.load(Ordering::Relaxed) {
+                let _ = tx.send(WorkerEvent::Finished(Ok(FetchSummary::default())));
+                return;
+            }
+            let result = fetch_missing(&root, &credentials);
+            let _ = tx.send(WorkerEvent::Finished(result));
+        });
+        Self { events, cancel }
+    }
+
+    pub fn cancel(&self) {
+        self.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn poll(&self) -> Vec<WorkerEvent> {
+        self.events.try_iter().collect()
+    }
+}
