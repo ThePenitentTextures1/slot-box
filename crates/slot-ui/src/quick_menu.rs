@@ -89,6 +89,7 @@ pub enum QuickRow {
     ScReset,
     LidOff,
     FetchArt,
+    FetchMissingBoxArt,
     ScreenScraperAccount,
     Controls,
     ControlsShelf,
@@ -137,7 +138,7 @@ pub enum QuickRow {
 }
 
 impl QuickRow {
-    pub const ALL: [QuickRow; 124] = [
+    pub const ALL: [QuickRow; 125] = [
         QuickRow::FastForward,
         QuickRow::FastForwardSound,
         QuickRow::Screen,
@@ -218,6 +219,7 @@ impl QuickRow {
         QuickRow::ScReset,
         QuickRow::LidOff,
         QuickRow::FetchArt,
+        QuickRow::FetchMissingBoxArt,
         QuickRow::Controls,
         QuickRow::ControlsShelf,
         QuickRow::ControlsInGame,
@@ -287,10 +289,11 @@ impl QuickRow {
 
     pub const WIFI: [QuickRow; 2] = [QuickRow::WifiPower, QuickRow::Networks];
 
-    pub const NETWORK: [QuickRow; 5] = [
+    pub const NETWORK: [QuickRow; 6] = [
         QuickRow::Server,
         QuickRow::Romm,
         QuickRow::FetchArt,
+        QuickRow::FetchMissingBoxArt,
         QuickRow::ScreenScraperAccount,
         QuickRow::CheckUpdates,
     ];
@@ -510,6 +513,7 @@ impl QuickRow {
             QuickRow::WifiPower | QuickRow::Networks => &QuickRow::WIFI,
             QuickRow::CheckUpdates
             | QuickRow::FetchArt
+            | QuickRow::FetchMissingBoxArt
             | QuickRow::ScreenScraperAccount
             | QuickRow::Romm
             | QuickRow::Server => &QuickRow::NETWORK,
@@ -675,6 +679,7 @@ impl QuickRow {
             QuickRow::General => "General",
             QuickRow::LidOff => "Lid Power Off",
             QuickRow::FetchArt => "Fetch Missing Art",
+            QuickRow::FetchMissingBoxArt => "Fetch Missing Box Art",
             QuickRow::ScreenScraperAccount => "ScreenScraper Account (X: Forget)",
             QuickRow::Network => "Tools",
             QuickRow::Wifi | QuickRow::WifiPower => "Wi-Fi",
@@ -757,6 +762,7 @@ impl QuickRow {
             self,
             QuickRow::DateTime
                 | QuickRow::FetchArt
+                | QuickRow::FetchMissingBoxArt
                 | QuickRow::ScreenScraperAccount
                 | QuickRow::About
                 | QuickRow::Screen
