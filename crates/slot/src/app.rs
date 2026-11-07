@@ -5730,13 +5730,13 @@ impl App {
                         let (cw, ch) = slot_ui::cart_box(selected.platform);
                         let (cw, ch) = (cw as f32, ch as f32);
                         let (shelf_x, scale) = self.shelf().selected_at(canvas);
-                        let end = [shelf_x, slot_ui::foot_y(ch * scale) - ch * scale, cw * scale, ch * scale];
+                        let end = [canvas.w / 2.0 - cw * scale / 2.0, canvas.h - 64.0 - ch * scale, cw * scale, ch * scale];
                         let start = [canvas.w / 2.0 - cw / 2.0, (canvas.h - ch) / 2.0, cw, ch];
                         let index = self.shelf().index;
                         boxview::insert(
                             canvas, faces,
                             (w * slot_ui::BOX_VIEW_SCALE * OPEN_BOX_SCALE, h * slot_ui::BOX_VIEW_SCALE * OPEN_BOX_SCALE),
-                            start, end, (*t / INSERT_S).clamp(0.0, 1.0), out,
+                            start, end, self.seat(), out,
                             |rect, out| self.shelf().draw_cart_at(index, rect, out),
                         );
                         draw_empty_slot(canvas, self.slot_faces, out);
@@ -5771,10 +5771,10 @@ impl App {
                         let (cw, ch) = slot_ui::cart_box(selected.platform);
                         let (cw, ch) = (cw as f32, ch as f32);
                         let (shelf_x, scale) = self.shelf().selected_at(canvas);
-                        let shelf_rect = [shelf_x, slot_ui::foot_y(ch * scale) - ch * scale, cw * scale, ch * scale];
+                        let shelf_rect = [canvas.w / 2.0 - cw * scale / 2.0, canvas.h - 64.0 - ch * scale, cw * scale, ch * scale];
                         let open_rect = [canvas.w / 2.0 - cw / 2.0, (canvas.h - ch) / 2.0, cw, ch];
                         let index = self.shelf().index;
-                        let progress = ((*t + EJECT_HOLD_S) / (EJECT_S + EJECT_HOLD_S)).clamp(0.0, 1.0);
+                        let progress = (1.0 - self.seat()).clamp(0.0, 1.0);
                         boxview::eject(
                             canvas, faces,
                             (w * slot_ui::BOX_VIEW_SCALE * OPEN_BOX_SCALE, h * slot_ui::BOX_VIEW_SCALE * OPEN_BOX_SCALE),
