@@ -5733,13 +5733,14 @@ impl App {
                         let seated = (sw as f32, sh as f32);
                         let start = [canvas.w / 2.0 - cw / 2.0, (canvas.h - ch) / 2.0, cw, ch];
                         let index = self.shelf().index;
+                        slot_ui::draw_slot_back(canvas, self.slot_faces, 1.0, out);
                         boxview::insert(
                             canvas, faces,
                             (w * slot_ui::BOX_VIEW_SCALE * OPEN_BOX_SCALE, h * slot_ui::BOX_VIEW_SCALE * OPEN_BOX_SCALE),
                             start, (cw, ch), seated, self.seat(), out,
                             |rect, out| self.shelf().draw_cart_at(index, rect, out),
                         );
-                        draw_empty_slot(canvas, self.slot_faces, out);
+                        slot_ui::draw_slot_front(canvas, self.slot_faces, 1.0, out);
                         draw_footer(canvas, self.battery, self.battery_percent, self.bolt,
                             self.shelf_clock, footer_ink(self.light()), out);
                         if self.wifi_up() { slot_ui::draw_wifi_icon(self.battery_percent, self.wifi_face(), out); }
@@ -5774,13 +5775,14 @@ impl App {
                         let seated = (sw as f32, sh as f32);
                         let start = [canvas.w / 2.0 - cw / 2.0, (canvas.h - ch) / 2.0, cw, ch];
                         let index = self.shelf().index;
+                        slot_ui::draw_slot_back(canvas, self.slot_faces, 1.0, out);
                         boxview::eject(
                             canvas, faces,
                             (w * slot_ui::BOX_VIEW_SCALE * OPEN_BOX_SCALE, h * slot_ui::BOX_VIEW_SCALE * OPEN_BOX_SCALE),
                             start, (cw, ch), seated, self.seat(), out,
                             |rect, out| self.shelf().draw_cart_at(index, rect, out),
                         );
-                        draw_empty_slot(canvas, self.slot_faces, out);
+                        slot_ui::draw_slot_front(canvas, self.slot_faces, 1.0, out);
                         draw_footer(canvas, self.battery, self.battery_percent, self.bolt,
                             self.shelf_clock, footer_ink(self.light()), out);
                         if self.wifi_up() { slot_ui::draw_wifi_icon(self.battery_percent, self.wifi_face(), out); }
