@@ -117,21 +117,22 @@ fn get(url: &str) -> Result<(u16, Vec<u8>), FetchError> {
 
 fn media_for(value: &serde_json::Value) -> Option<(&'static str, String)> {
     let medias = value.get("response")?.get("jeu")?.get("medias")?.as_array()?;
-    // Prefer an explicit face set. ScreenScraper's common box-2D scan is accepted as a
-    // texture candidate only when the API does not provide face-specific images.
+    // Prefer explicit face sets and a flat texture. A single box-2D/3D view cannot satisfy
+    // the resolver, which requires all faces or a three-panel texture.
     let mut faces: [Option<String>; 3] = [None, None, None];
     let mut texture = None;
-    let mut front = None;
     for media in medias {
         if media.get("parent").and_then(|v| v.as_str()).is_some_and(|p| p != "jeu") { continue; }
-        let kind = media.get("type")?.as_str()?;
-        let url = media.get("url")?.as_str()?.to_string();
+        let (Some(kind), Some(url)) = (
+            media.get("type").and_then(|v| v.as_str()),
+            media.get("url").and_then(|v| v.as_str()),
+        ) else { continue; };
+        let url = url.to_string();
         match kind {
             "box-front" => faces[0] = Some(url),
             "box-side" => faces[1] = Some(url),
             "box-back" => faces[2] = Some(url),
             "box-texture" | "box-2D-texture" => texture = Some(url),
-            "box-2D" | "box-3D" if front.is_none() => front = Some(url),
             _ => {}
         }
     }
