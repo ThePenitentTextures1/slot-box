@@ -89,6 +89,7 @@ pub enum QuickRow {
     ScReset,
     LidOff,
     FetchArt,
+    ScreenScraperAccount,
     Controls,
     ControlsShelf,
     ControlsInGame,
@@ -286,10 +287,11 @@ impl QuickRow {
 
     pub const WIFI: [QuickRow; 2] = [QuickRow::WifiPower, QuickRow::Networks];
 
-    pub const NETWORK: [QuickRow; 4] = [
+    pub const NETWORK: [QuickRow; 5] = [
         QuickRow::Server,
         QuickRow::Romm,
         QuickRow::FetchArt,
+        QuickRow::ScreenScraperAccount,
         QuickRow::CheckUpdates,
     ];
 
@@ -508,6 +510,7 @@ impl QuickRow {
             QuickRow::WifiPower | QuickRow::Networks => &QuickRow::WIFI,
             QuickRow::CheckUpdates
             | QuickRow::FetchArt
+            | QuickRow::ScreenScraperAccount
             | QuickRow::Romm
             | QuickRow::Server => &QuickRow::NETWORK,
             QuickRow::RommProtocol
@@ -672,6 +675,7 @@ impl QuickRow {
             QuickRow::General => "General",
             QuickRow::LidOff => "Lid Power Off",
             QuickRow::FetchArt => "Fetch Missing Art",
+            QuickRow::ScreenScraperAccount => "ScreenScraper Account (X: Forget)",
             QuickRow::Network => "Tools",
             QuickRow::Wifi | QuickRow::WifiPower => "Wi-Fi",
             QuickRow::Networks => "Network",
@@ -753,6 +757,7 @@ impl QuickRow {
             self,
             QuickRow::DateTime
                 | QuickRow::FetchArt
+                | QuickRow::ScreenScraperAccount
                 | QuickRow::About
                 | QuickRow::Screen
                 | QuickRow::Game
