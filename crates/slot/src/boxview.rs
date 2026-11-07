@@ -1,6 +1,6 @@
 //! Box View scene ownership and Box View-specific insert/eject pose.
-use slot_gfx::{Canvas, Draw, Millis, OUT_H};
-use slot_ui::{BoxFaceTextures, MOUTH_H};
+use slot_gfx::{Canvas, Draw, OUT_H};
+use slot_ui::{BoxFaceTextures, Millis, MOUTH_H};
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Item { Cartridge, Box }
