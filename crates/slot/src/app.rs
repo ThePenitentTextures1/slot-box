@@ -5739,10 +5739,14 @@ impl App {
                             start, end, (*t / INSERT_S).clamp(0.0, 1.0), out,
                             |rect, out| self.shelf().draw_cart_at(index, rect, out),
                         );
+                        draw_empty_slot(canvas, self.slot_faces, out);
+                        draw_footer(canvas, self.battery, self.battery_percent, self.bolt,
+                            self.shelf_clock, footer_ink(self.light()), out);
+                        if self.wifi_up() { slot_ui::draw_wifi_icon(self.battery_percent, self.wifi_face(), out); }
                     } else {
                         self.shelf().draw_row(self.canvas(), Some(cart), 0.0, self.seat(), 1.0, out);
+                        self.chrome(cart, 0.0, out);
                     }
-                    self.chrome(cart, 0.0, out);
                 } else {
                     if !resumed {
                         self.draw_background(out);
@@ -5777,10 +5781,14 @@ impl App {
                             shelf_rect, open_rect, progress, out,
                             |rect, out| self.shelf().draw_cart_at(index, rect, out),
                         );
+                        draw_empty_slot(canvas, self.slot_faces, out);
+                        draw_footer(canvas, self.battery, self.battery_percent, self.bolt,
+                            self.shelf_clock, footer_ink(self.light()), out);
+                        if self.wifi_up() { slot_ui::draw_wifi_icon(self.battery_percent, self.wifi_face(), out); }
                     } else {
                         self.shelf().draw_row(self.canvas(), Some(cart), 0.0, self.seat(), 1.0, out);
+                        self.chrome(cart, 0.0, out);
                     }
-                    self.chrome(cart, 0.0, out);
                 } else {
                     self.draw_background(out);
                     self.shelf().draw_row(self.canvas(), Some(cart), 0.0, self.seat(), 1.0, out);
