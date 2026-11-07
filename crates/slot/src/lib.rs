@@ -12,6 +12,7 @@ pub mod baseos;
 pub mod bezel;
 pub mod boot_time;
 pub mod bootlogo;
+pub mod box_art_fetch;
 pub mod box_faces;
 pub mod boxview;
 pub mod build_info;
