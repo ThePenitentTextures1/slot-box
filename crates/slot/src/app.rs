@@ -371,6 +371,8 @@ pub enum KeyboardFor {
     NetworkName,
     RommServer,
     RommPort,
+    ScreenScraperUsername,
+    ScreenScraperPassword { username: String },
 }
 
 pub struct NetLegends {
@@ -3884,6 +3886,12 @@ impl App {
     }
 
     fn quick_menu_input(&mut self, row: QuickRow, action: Action) {
+        if row == QuickRow::ScreenScraperAccount && action == Action::GbaDown(Btn::X) {
+            if let Some(root) = &self.root {
+                crate::screenscraper_account::Account::forget(root);
+            }
+            return;
+        }
         if row.binds() {
             match action {
                 Action::GbaDown(Btn::A) => return self.start_capture(row),
@@ -4006,6 +4014,13 @@ impl App {
             }
             QuickRow::About => self.phase = Phase::About,
             QuickRow::FetchArt => self.open_fetch_missing_art(),
+            QuickRow::ScreenScraperAccount => self.open_keyboard(
+                "ScreenScraper Username",
+                Some("Enter account name; password follows"),
+                KeyboardFor::ScreenScraperUsername,
+                slot_ui::Layout::General,
+                "",
+            ),
             QuickRow::CheckUpdates => self.open_check_for_updates(),
             QuickRow::Server => self.open_server(),
             QuickRow::Network if !self.wifi_up() => {
@@ -9367,6 +9382,24 @@ impl App {
                 slot_ui::Layout::General,
                 "",
             ),
+            KeyboardFor::ScreenScraperUsername if text.trim().is_empty() => {}
+            KeyboardFor::ScreenScraperUsername => self.open_keyboard(
+                "ScreenScraper Password",
+                None,
+                KeyboardFor::ScreenScraperPassword { username: text.trim().to_string() },
+                slot_ui::Layout::General,
+                "",
+            ),
+            KeyboardFor::ScreenScraperPassword { username } => {
+                if let Some(root) = &self.root {
+                    let account = crate::screenscraper_account::Account {
+                        username,
+                        password: text,
+                    };
+                    let _ = account.save(root);
+                }
+                self.keyboard = None;
+            }
             KeyboardFor::RommServer => {
                 self.romm.server = text.trim().to_string();
                 self.keyboard = None;
