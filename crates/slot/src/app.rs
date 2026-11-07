@@ -5719,7 +5719,7 @@ impl App {
                 self.draw_background(out);
                 self.chrome(cart, 0.0, out);
             }
-            Phase::Inserting { cart, resumed, t, .. } => {
+            Phase::Inserting { cart, resumed, .. } => {
                 if self.carousel_view == CarouselView::Boxes
                     && self.box_scene != BoxScene::Carousel
                     && !resumed
@@ -5763,7 +5763,7 @@ impl App {
             Phase::Playing { .. } if self.framed_panel() && self.screen < 1.0 => {
                 self.draw_powering(out)
             }
-            Phase::Ejecting { cart, t } => {
+            Phase::Ejecting { cart, .. } => {
                 if self.carousel_view == CarouselView::Boxes && self.box_scene != BoxScene::Carousel {
                     self.draw_background(out);
                     if let Some((selected, faces, (w, h, _))) = self.selected_box() {
