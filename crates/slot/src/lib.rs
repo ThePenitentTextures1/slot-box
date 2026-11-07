@@ -54,6 +54,7 @@ pub mod print_scene;
 pub mod resample;
 pub mod rewind;
 pub mod romm;
+pub mod screenscraper_account;
 pub mod root;
 pub mod server;
 pub mod session;
