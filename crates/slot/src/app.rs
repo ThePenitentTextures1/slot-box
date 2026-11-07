@@ -5729,14 +5729,14 @@ impl App {
                         let canvas = self.canvas();
                         let (cw, ch) = slot_ui::cart_box(selected.platform);
                         let (cw, ch) = (cw as f32, ch as f32);
-                        let (shelf_x, scale) = self.shelf().selected_at(canvas);
-                        let end = [canvas.w / 2.0 - cw * scale / 2.0, canvas.h - 64.0 - ch * scale, cw * scale, ch * scale];
+                        let (sw, sh) = slot_ui::seated_box(selected.platform);
+                        let seated = (sw as f32, sh as f32);
                         let start = [canvas.w / 2.0 - cw / 2.0, (canvas.h - ch) / 2.0, cw, ch];
                         let index = self.shelf().index;
                         boxview::insert(
                             canvas, faces,
                             (w * slot_ui::BOX_VIEW_SCALE * OPEN_BOX_SCALE, h * slot_ui::BOX_VIEW_SCALE * OPEN_BOX_SCALE),
-                            start, end, self.seat(), out,
+                            start, (cw, ch), seated, self.seat(), out,
                             |rect, out| self.shelf().draw_cart_at(index, rect, out),
                         );
                         draw_empty_slot(canvas, self.slot_faces, out);
@@ -5770,15 +5770,14 @@ impl App {
                         let canvas = self.canvas();
                         let (cw, ch) = slot_ui::cart_box(selected.platform);
                         let (cw, ch) = (cw as f32, ch as f32);
-                        let (shelf_x, scale) = self.shelf().selected_at(canvas);
-                        let shelf_rect = [canvas.w / 2.0 - cw * scale / 2.0, canvas.h - 64.0 - ch * scale, cw * scale, ch * scale];
-                        let open_rect = [canvas.w / 2.0 - cw / 2.0, (canvas.h - ch) / 2.0, cw, ch];
+                        let (sw, sh) = slot_ui::seated_box(selected.platform);
+                        let seated = (sw as f32, sh as f32);
+                        let start = [canvas.w / 2.0 - cw / 2.0, (canvas.h - ch) / 2.0, cw, ch];
                         let index = self.shelf().index;
-                        let progress = (1.0 - self.seat()).clamp(0.0, 1.0);
                         boxview::eject(
                             canvas, faces,
                             (w * slot_ui::BOX_VIEW_SCALE * OPEN_BOX_SCALE, h * slot_ui::BOX_VIEW_SCALE * OPEN_BOX_SCALE),
-                            shelf_rect, open_rect, progress, out,
+                            start, (cw, ch), seated, self.seat(), out,
                             |rect, out| self.shelf().draw_cart_at(index, rect, out),
                         );
                         draw_empty_slot(canvas, self.slot_faces, out);
