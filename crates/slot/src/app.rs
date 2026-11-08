@@ -1772,7 +1772,9 @@ impl App {
             | QuickRow::ScGuide
             | QuickRow::Controls
             | QuickRow::ControlsShelf
-            | QuickRow::ControlsInGame => None,
+            | QuickRow::ControlsInGame
+            | QuickRow::FetchMissingBoxArt
+            | QuickRow::ScreenScraperAccount => None,
         }
     }
 
@@ -4167,7 +4169,8 @@ impl App {
             | QuickRow::ScSunlightDown
             | QuickRow::ScReset
             | QuickRow::ScGuide
-            | QuickRow::LidOff => {}
+            | QuickRow::LidOff
+            | QuickRow::FetchMissingBoxArt => {}
         }
     }
 
@@ -4478,7 +4481,9 @@ impl App {
             | QuickRow::RommStatus
             | QuickRow::RommPairedServer
             | QuickRow::RommDisconnect
-            | QuickRow::Server => return,
+            | QuickRow::Server
+            | QuickRow::FetchMissingBoxArt
+            | QuickRow::ScreenScraperAccount => return,
         }
         self.persist();
     }
