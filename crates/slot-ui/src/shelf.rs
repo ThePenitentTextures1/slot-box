@@ -113,6 +113,11 @@ pub struct Shelf {
     ride: f32,
     vel: f32,
     held: Option<(i32, Millis, usize)>,
+    /// Tracks scroll position used exclusively for width interpolation.
+    /// Lags behind `index` changes so that item widths transition smoothly
+    /// as the spring carries the carousel from one stop to the next.
+    width_scroll: f32,
+    width_vel: f32,
 }
 
 impl Shelf {
@@ -138,6 +143,8 @@ impl Shelf {
             ride: 0.0,
             vel: 0.0,
             held: None,
+            width_scroll: 0.0,
+            width_vel: 0.0,
         }
     }
 
@@ -174,6 +181,8 @@ impl Shelf {
         self.scroll = i as f32;
         self.ride = i as f32;
         self.vel = 0.0;
+        self.width_scroll = i as f32;
+        self.width_vel = 0.0;
     }
 
     pub fn set_box_view(&mut self, enabled: bool) {
@@ -483,20 +492,51 @@ impl Shelf {
         };
         let cart = &self.carts[index];
         if self.box_view {
-            if let Some(faces) = self.box_faces(index) {
-                let (front_w, _, side_w) = box_view_dimensions(cart, faces.japanese);
-                return (
-                    (if slot == 0 { front_w } else { side_w }) * BOX_VIEW_SCALE,
-                    false,
-                );
-            }
-            let width = if slot == 0 {
-                cart_box(cart.platform).0 as f32
-            } else {
-                loose_cart_dimensions(cart).0
+            // Interpolate between the outgoing and incoming widths while the
+            // carousel spring is in flight. `t` is 0.0 at the moment of the
+            // step and 1.0 when width_scroll has fully settled on the target.
+            let target = self.scroll_target();
+            let raw_t = (target - self.width_scroll).abs();
+            let t = (1.0 - raw_t).clamp(0.0, 1.0);
+
+            let width_for = |idx: usize, is_selected: bool| -> (f32, bool) {
+                let c = &self.carts[idx];
+                if let Some(faces) = self.box_faces(idx) {
+                    let (front_w, _, side_w) = box_view_dimensions(c, faces.japanese);
+                    ((if is_selected { front_w } else { side_w }) * BOX_VIEW_SCALE, false)
+                } else {
+                    let width = if is_selected {
+                        cart_box(c.platform).0 as f32
+                    } else {
+                        loose_cart_dimensions(c).0
+                    };
+                    let scale = if is_selected { 1.0 } else { BOX_VIEW_SCALE };
+                    (width * scale, false)
+                }
             };
-            let scale = if slot == 0 { 1.0 } else { BOX_VIEW_SCALE };
-            return (width * scale, false);
+
+            // The outgoing item is the one that *was* in this display slot
+            // before the most recent step — approximated by looking one step
+            // back along the direction of travel. For slots that don't change
+            // identity (neither endpoint of the motion), prev == curr.
+            let is_selected = slot == 0;
+            let (curr_w, _) = width_for(index, is_selected);
+
+            // Find the index this slot held just before the last step.
+            let n = self.carts.len() as i32;
+            let travel_dir = (target - self.width_scroll).signum() as i32;
+            let prev_idx = if n > 1 && travel_dir != 0 {
+                // The slot's previous occupant was shifted by travel_dir.
+                let prev_offset = slot - travel_dir;
+                self.cart_at_offset(prev_offset).unwrap_or(index)
+            } else {
+                index
+            };
+            let prev_is_selected = (slot - travel_dir) == 0;
+            let (prev_w, _) = width_for(prev_idx, prev_is_selected);
+
+            let blended = prev_w + (curr_w - prev_w) * t;
+            return (blended, false);
         }
         match cart.platform {
             Platform::Gba | Platform::Gbav => (CART_W as f32, true),
@@ -534,6 +574,13 @@ impl Shelf {
         let decay = (-OMEGA * dt).exp();
         self.scroll = target + (off + pull * dt) * decay;
         self.vel = (self.vel - OMEGA * pull * dt) * decay;
+
+        // Drive width_scroll with the same spring so item widths transition
+        // at the same rate as the positional scroll.
+        let woff = self.width_scroll - target;
+        let wpull = self.width_vel + OMEGA * woff;
+        self.width_scroll = target + (woff + wpull * dt) * decay;
+        self.width_vel = (self.width_vel - OMEGA * wpull * dt) * decay;
     }
 
     pub fn draw(
