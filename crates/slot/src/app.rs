@@ -5579,10 +5579,12 @@ impl App {
         }
         if self.studio.is_some() && !matches!(self.phase, Phase::Doze { .. }) {
             if self.carousel_view == CarouselView::Boxes {
-                boxview::cartridge_studio(|| self.draw_studio(out));
-            } else {
-                self.draw_studio(out);
+                // Paint the open-box scene as the studio backdrop before the
+                // studio ground panel slides in over it.
+                self.draw_background(out);
+                self.draw_open_box(1.0, false, BoxItem::Cartridge, out);
             }
+            self.draw_studio(out);
             return self.hud.draw(self.canvas(), self.now(), out);
         }
         if self.update.is_some() {
@@ -5655,24 +5657,31 @@ impl App {
                 self.draw_background(out);
                 match (self.core_picker_shown(), self.selected_stem()) {
                     (Some(picker), Some(stem)) => {
+                        if self.carousel_view == CarouselView::Boxes {
+                            // In Box View the shelf row is replaced by the open-box
+                            // scene as the picker backdrop.  Draw the background
+                            // before the picker closure captures `self` and `out`.
+                            self.draw_background(out);
+                            self.draw_open_box(1.0, false, BoxItem::Cartridge, out);
+                        }
                         let mut draw_picker = || {
                             let open = ease(picker.openness(self.now()));
                             let dim = 1.0 + (CORE_PICKER_DIM - 1.0) * open;
-                            self.shelf().draw_row(
-                                self.canvas(),
-                                Some(stem),
-                                0.0,
-                                CORE_PICKER_RECEDE * open,
-                                dim,
-                                out,
-                            );
+                            // In Box View we skip the shelf row — the open-box scene
+                            // is already painted above.
+                            if self.carousel_view != CarouselView::Boxes {
+                                self.shelf().draw_row(
+                                    self.canvas(),
+                                    Some(stem),
+                                    0.0,
+                                    CORE_PICKER_RECEDE * open,
+                                    dim,
+                                    out,
+                                );
+                            }
                             draw_empty_slot(self.canvas(), self.slot_faces, out);
                         };
-                        if self.carousel_view == CarouselView::Boxes {
-                            boxview::emulator_picker(draw_picker);
-                        } else {
-                            draw_picker();
-                        }
+                        draw_picker();
                     }
                     _ => {
                         let box_scene_drawn = self.draw_box_scene(out);
@@ -7006,7 +7015,16 @@ impl App {
         let face = shelf.face(shelf.index);
         let under = picked.as_ref().map_or([None; 2], |cart| shelf.behind(&cart.stem));
         if let Some(cart) = picked {
-            self.studio_from = crate::studio_view::shelf_rect(self.canvas().w, &cart);
+            // When opening from the Open Box View the cart is centred on screen
+            // at vanilla cart size; slide the studio in from that position.
+            self.studio_from = if self.carousel_view == CarouselView::Boxes
+                && self.box_scene != BoxScene::Carousel
+            {
+                let (cw, ch) = slot_ui::cart_box(cart.platform);
+                boxview::open_box_cart_rect(self.canvas(), cw as f32, ch as f32)
+            } else {
+                crate::studio_view::shelf_rect(self.canvas().w, &cart)
+            };
             self.studio_shelf_face = face;
             self.studio_shelf_under = under;
             self.studio_opened = self.now();
