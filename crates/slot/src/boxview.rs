@@ -51,5 +51,33 @@ pub fn insert(canvas:Canvas,faces:BoxFaceTextures,box_size:(f32,f32),from:[f32;4
 pub fn eject(canvas:Canvas,faces:BoxFaceTextures,box_size:(f32,f32),from:[f32;4],native:(f32,f32),seated:(f32,f32),seat:f32,out:&mut Vec<Draw>,draw:impl FnOnce([f32;4],&mut Vec<Draw>)) {
     transition(canvas,faces,box_size,from,native,seated,seat,false,out,draw)
 }
-pub fn emulator_picker(draw:impl FnOnce()){draw()}
-pub fn cartridge_studio(draw:impl FnOnce()){draw()}
+/// Draws the emulator picker over the Open Box View background.
+///
+/// NOTE: Due to Rust borrow constraints (the picker closure and the background
+/// closure both need `&self` + `&mut out`), the actual Box View branching is
+/// handled inline in `app.rs`.  This function documents the intended layering:
+/// background first, then the vanilla picker on top.
+pub fn emulator_picker(draw_background: impl FnOnce(), draw_picker: impl FnOnce()) {
+    draw_background();
+    draw_picker();
+}
+
+/// Draws the Cartridge Studio over the Open Box View background.
+///
+/// NOTE: Due to Rust borrow constraints the actual Box View branching is
+/// handled inline in `app.rs`.  This function documents the intended layering:
+/// background first, then the studio draw on top.
+pub fn cartridge_studio(draw_background: impl FnOnce(), draw_studio: impl FnOnce()) {
+    draw_background();
+    draw_studio();
+}
+
+/// Returns the screen rect `[x, y, w, h]` of the cartridge in the fully-open
+/// Box View, i.e. at `progress = 1.0` of `draw_open_box`.  Used as
+/// `studio_from` when the studio is opened from Open Box View so that the
+/// slide-in animation departs from the correct on-screen position.
+pub fn open_box_cart_rect(canvas: Canvas, cw: f32, ch: f32) -> [f32; 4] {
+    let x = canvas.w / 2.0 - cw / 2.0;
+    let y = (canvas.h - ch) / 2.0;
+    [x, y, cw, ch]
+}
