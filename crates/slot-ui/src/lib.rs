@@ -9,6 +9,7 @@ mod backdrop;
 mod barcode;
 mod battery;
 mod board;
+mod box_rotation;
 mod cart;
 mod clock;
 mod draw;
@@ -57,6 +58,7 @@ pub use board::{
     CHIP_W, FINGERS, FINGER_H, FINGER_Y, GBA_SEATS, HOP_LIFT, LID_TURN, ROM_H, ROM_W, ROM_X, ROM_Y,
     SHADOW_H, SHADOW_W, SLIDE_SHARE, SLIDE_UP, SOCKET_H, SOCKET_U, SOCKET_V, SOCKET_W, TURN_PAD,
 };
+pub use box_rotation::{box_rotation_width, draw_rotated_box};
 pub use cart::{
     bare_face, cart_backing, cart_box, cart_face, cart_face_with, cart_interior, cart_shadow, clean_label,
     folder_gb_shell, gb_cart_shadow, gb_shell_of, is_clear, label_colour, label_panel, label_size,
