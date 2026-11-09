@@ -2,6 +2,7 @@ use slot_gfx::{Canvas, Draw, TexId, OUT_H};
 use slot_store::{Cart, Platform};
 
 use crate::board::{board_in, Placed};
+use crate::box_rotation::{box_rotation_width, draw_rotated_box};
 use crate::cart::{cart_box, label_colour, label_rect, label_text, shelf_shape, CART_H, CART_W};
 use crate::hud::Millis;
 use crate::silhouette::GbShell;
@@ -86,7 +87,7 @@ pub struct BoxFaceTextures {
     pub back_size: (u32, u32),
     /// Whether the ROM identifies a Japanese release.
     pub japanese: bool,
-    /// Pivot at the spine/front seam in the flattened net's pixel coordinates.
+    /// Spine/front seam in the flattened net's pixel coordinates, not the 3D pivot.
     pub pivot: [f32; 2],
     /// Front-face center in the flattened net's pixel coordinates.
     pub front_center: [f32; 2],
@@ -113,11 +114,6 @@ pub struct Shelf {
     ride: f32,
     vel: f32,
     held: Option<(i32, Millis, usize)>,
-    /// Tracks scroll position used exclusively for width interpolation.
-    /// Lags behind `index` changes so that item widths transition smoothly
-    /// as the spring carries the carousel from one stop to the next.
-    width_scroll: f32,
-    width_vel: f32,
 }
 
 impl Shelf {
@@ -143,8 +139,6 @@ impl Shelf {
             ride: 0.0,
             vel: 0.0,
             held: None,
-            width_scroll: 0.0,
-            width_vel: 0.0,
         }
     }
 
@@ -181,8 +175,6 @@ impl Shelf {
         self.scroll = i as f32;
         self.ride = i as f32;
         self.vel = 0.0;
-        self.width_scroll = i as f32;
-        self.width_vel = 0.0;
     }
 
     pub fn set_box_view(&mut self, enabled: bool) {
@@ -283,6 +275,12 @@ impl Shelf {
 
     pub fn on_screen(&self) -> Vec<usize> {
         self.around(SLOTS)
+    }
+
+    pub fn box_visible_radius(canvas: Canvas) -> i32 {
+        // Even the narrowest physical spine is wider than 20 mm.
+        let minimum_pitch = 20.0 * BOX_PIXELS_PER_MM * BOX_VIEW_SCALE * SIDE_SCALE;
+        (canvas.w / 2.0 / minimum_pitch).ceil() as i32 + 2
     }
 
     pub fn around(&self, radius: i32) -> Vec<usize> {
@@ -486,57 +484,34 @@ impl Shelf {
         (self.centre(canvas, 0) - width * scale / 2.0, scale)
     }
 
-    fn slot_width(&self, slot: i32) -> (f32, bool) {
+    /// Center, scale and rotation of the selected box in the current carousel frame.
+    pub fn selected_box_pose(&self, canvas: Canvas) -> ([f32; 2], f32, f32) {
+        let offset = self.scroll_target() - self.scroll;
+        (
+            [self.centre(canvas, 0), OUT_H as f32 / 2.0],
+            BOX_VIEW_SCALE * shrink(offset),
+            offset.abs().min(1.0) * std::f32::consts::FRAC_PI_2,
+        )
+    }
+
+    fn slot_width(&self, slot: i32, u: f32) -> (f32, bool) {
         let Some(index) = self.cart_at_offset(slot) else {
             return (CART_W as f32, true);
         };
         let cart = &self.carts[index];
         if self.box_view {
-            // Interpolate between the outgoing and incoming widths while the
-            // carousel spring is in flight. `t` is 0.0 at the moment of the
-            // step and 1.0 when width_scroll has fully settled on the target.
-            let target = self.scroll_target();
-            let raw_t = (target - self.width_scroll).abs();
-            let t = (1.0 - raw_t).clamp(0.0, 1.0);
-
-            let width_for = |idx: usize, is_selected: bool| -> (f32, bool) {
-                let c = &self.carts[idx];
-                if let Some(faces) = self.box_faces(idx) {
-                    let (front_w, _, side_w) = box_view_dimensions(c, faces.japanese);
-                    ((if is_selected { front_w } else { side_w }) * BOX_VIEW_SCALE, false)
-                } else {
-                    let width = if is_selected {
-                        cart_box(c.platform).0 as f32
-                    } else {
-                        loose_cart_dimensions(c).0
-                    };
-                    let scale = if is_selected { 1.0 } else { BOX_VIEW_SCALE };
-                    (width * scale, false)
-                }
-            };
-
-            // The outgoing item is the one that *was* in this display slot
-            // before the most recent step — approximated by looking one step
-            // back along the direction of travel. For slots that don't change
-            // identity (neither endpoint of the motion), prev == curr.
-            let is_selected = slot == 0;
-            let (curr_w, _) = width_for(index, is_selected);
-
-            // Find the index this slot held just before the last step.
-            let n = self.carts.len() as i32;
-            let travel_dir = (target - self.width_scroll).signum() as i32;
-            let prev_idx = if n > 1 && travel_dir != 0 {
-                // The slot's previous occupant was shifted by travel_dir.
-                let prev_offset = slot - travel_dir;
-                self.cart_at_offset(prev_offset).unwrap_or(index)
+            let t = (slot as f32 - u).abs().min(1.0);
+            let width = if let Some(faces) = self.box_faces(index) {
+                box_rotation_width(
+                    box_view_dimensions(cart, faces.japanese),
+                    t * std::f32::consts::FRAC_PI_2,
+                ) * BOX_VIEW_SCALE
             } else {
-                index
+                let full = cart_box(cart.platform).0 as f32;
+                let small = loose_cart_dimensions(cart).0 * BOX_VIEW_SCALE;
+                full + (small - full) * t
             };
-            let prev_is_selected = (slot - travel_dir) == 0;
-            let (prev_w, _) = width_for(prev_idx, prev_is_selected);
-
-            let blended = prev_w + (curr_w - prev_w) * t;
-            return (blended, false);
+            return (width, false);
         }
         match cart.platform {
             Platform::Gba | Platform::Gbav => (CART_W as f32, true),
@@ -545,7 +520,7 @@ impl Shelf {
     }
 
     fn pitch(&self, a: i32, u: f32) -> f32 {
-        let ((wa, gba_a), (wb, gba_b)) = (self.slot_width(a), self.slot_width(a + 1));
+        let ((wa, gba_a), (wb, gba_b)) = (self.slot_width(a, u), self.slot_width(a + 1, u));
         let (sa, sb) = (shrink(a as f32 - u), shrink((a + 1) as f32 - u));
         let gap_of = if gba_a || gba_b { CART_W as f32 } else { wa };
         wa * sa / 2.0 + gap_of * (1.0 - (sa + sb) / 2.0) + wb * sb / 2.0
@@ -574,13 +549,6 @@ impl Shelf {
         let decay = (-OMEGA * dt).exp();
         self.scroll = target + (off + pull * dt) * decay;
         self.vel = (self.vel - OMEGA * pull * dt) * decay;
-
-        // Drive width_scroll with the same spring so item widths transition
-        // at the same rate as the positional scroll.
-        let woff = self.width_scroll - target;
-        let wpull = self.width_vel + OMEGA * woff;
-        self.width_scroll = target + (woff + wpull * dt) * decay;
-        self.width_vel = (self.width_vel - OMEGA * wpull * dt) * decay;
     }
 
     pub fn draw(
@@ -680,7 +648,12 @@ impl Shelf {
         let recede = recede.clamp(0.0, 1.0);
         let dim = dim.clamp(0.0, 1.0);
         let target = self.scroll_target();
-        for slot in -SLOTS..=SLOTS {
+        let slots = if self.box_view {
+            Self::box_visible_radius(canvas)
+        } else {
+            SLOTS
+        };
+        for slot in -slots..=slots {
             let Some(i) = self.cart_at_offset(slot) else {
                 continue;
             };
@@ -698,23 +671,21 @@ impl Shelf {
             } else {
                 None
             };
-            let object_scale = if self.box_view && (box_faces.is_some() || slot != 0) {
-                BOX_VIEW_SCALE * scale
-            } else {
-                scale
-            };
             let (w, h) = if let Some(faces) = box_faces {
-                let (front_w, front_h, side_w) = box_view_dimensions(cart, faces.japanese);
-                if slot == 0 {
-                    (front_w * object_scale, front_h * object_scale)
-                } else {
-                    (side_w * object_scale, front_h * object_scale)
-                }
-            } else if self.box_view && slot != 0 {
+                let dimensions = box_view_dimensions(cart, faces.japanese);
+                let angle = t * std::f32::consts::FRAC_PI_2;
+                (
+                    box_rotation_width(dimensions, angle) * BOX_VIEW_SCALE * scale,
+                    dimensions.1 * BOX_VIEW_SCALE * scale,
+                )
+            } else if self.box_view {
                 let (width, height) = loose_cart_dimensions(cart);
-                (width * object_scale, height * object_scale)
+                (
+                    (cw as f32 + (width * BOX_VIEW_SCALE - cw as f32) * t) * scale,
+                    (ch as f32 + (height * BOX_VIEW_SCALE - ch as f32) * t) * scale,
+                )
             } else {
-                (cw as f32 * object_scale, ch as f32 * object_scale)
+                (cw as f32 * scale, ch as f32 * scale)
             };
             let away = offset.signum() * (1.0 + offset.abs());
             let x = self.centre(canvas, slot) - w / 2.0 + away * PART * recede;
@@ -741,25 +712,21 @@ impl Shelf {
                 continue;
             }
             if let Some(box_faces) = box_faces {
-                if slot == 0 && box_faces.front_size.0 > 0 && box_faces.front_size.1 > 0 {
-                    out.push(Draw::Tex {
-                        x,
-                        y,
-                        w,
-                        h,
-                        tex: box_faces.front,
-                        alpha: alpha * dim,
-                    });
-                    continue;
-                } else if slot != 0 && box_faces.side_size.0 > 0 && box_faces.side_size.1 > 0 {
-                    out.push(Draw::Tex {
-                        x,
-                        y,
-                        w,
-                        h,
-                        tex: box_faces.side,
-                        alpha: alpha * dim,
-                    });
+                if box_faces.front_size.0 > 0
+                    && box_faces.front_size.1 > 0
+                    && box_faces.side_size.0 > 0
+                    && box_faces.side_size.1 > 0
+                {
+                    let (front_w, front_h, depth) = box_view_dimensions(cart, box_faces.japanese);
+                    let s = BOX_VIEW_SCALE * scale;
+                    draw_rotated_box(
+                        box_faces,
+                        (front_w * s, front_h * s, depth * s),
+                        t * std::f32::consts::FRAC_PI_2,
+                        [x + w / 2.0, OUT_H as f32 / 2.0],
+                        alpha * dim,
+                        out,
+                    );
                     continue;
                 }
             }
