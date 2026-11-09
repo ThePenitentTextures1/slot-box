@@ -2342,13 +2342,17 @@ impl App {
 
     pub fn face_wants(&self) -> Vec<FaceWant> {
         let here = self.shelf();
-        let screen = here.on_screen();
+        let box_radius = (self.carousel_view == CarouselView::Boxes)
+            .then(|| Shelf::box_visible_radius(self.canvas()));
+        let screen = box_radius.map_or_else(|| here.on_screen(), |radius| here.around(radius));
         let mut wants: Vec<(usize, usize)> = screen.iter().map(|i| (self.shelf_at, *i)).collect();
         for at in self.neighbour_shelves() {
-            wants.extend(self.shelves[at].1.on_screen().into_iter().map(|i| (at, i)));
+            let shelf = &self.shelves[at].1;
+            let nearby = box_radius.map_or_else(|| shelf.on_screen(), |radius| shelf.around(radius));
+            wants.extend(nearby.into_iter().map(|i| (at, i)));
         }
         wants.extend(
-            here.around(FACE_AHEAD)
+            here.around(box_radius.map_or(FACE_AHEAD, |radius| FACE_AHEAD.max(radius + 2)))
                 .into_iter()
                 .filter(|i| !screen.contains(i))
                 .map(|i| (self.shelf_at, i)),
@@ -2382,7 +2386,7 @@ impl App {
     fn tick_box_scene(&mut self) {
         let now = self.now();
         self.box_scene = match self.box_scene {
-            BoxScene::FlippingBack { started }
+            BoxScene::FlippingBack { started, .. }
                 if now.saturating_sub(started) >= BOX_FLIP_MS =>
             {
                 BoxScene::Back {
@@ -2390,7 +2394,7 @@ impl App {
                     pan: [0.0, 0.0],
                 }
             }
-            BoxScene::FlippingFront { started }
+            BoxScene::FlippingFront { started, .. }
                 if now.saturating_sub(started) >= BOX_FLIP_MS =>
             {
                 BoxScene::Carousel
@@ -2462,7 +2466,11 @@ impl App {
                 }
                 match action {
                     Action::GbaDown(Btn::L2 | Btn::Select) => {
-                        self.box_scene = BoxScene::FlippingBack { started: self.now() };
+                        let (center, scale, angle) = self.shelf().selected_box_pose(self.canvas());
+                        self.box_scene = BoxScene::FlippingBack {
+                            started: self.now(),
+                            from: boxview::BoxPose { center, scale, angle },
+                        };
                         true
                     }
                     Action::GbaDown(Btn::A | Btn::Start) | Action::Insert => {
@@ -2476,7 +2484,7 @@ impl App {
                     _ => false,
                 }
             }
-            BoxScene::Back { .. } => match action {
+            BoxScene::Back { zoom, pan } => match action {
                 Action::GbaDown(Btn::L1) | Action::PreviousShelf => {
                     self.zoom_box_back(true);
                     true
@@ -2509,7 +2517,15 @@ impl App {
                     true
                 }
                 Action::GbaDown(Btn::B | Btn::R2) => {
-                    self.box_scene = BoxScene::FlippingFront { started: self.now() };
+                    let canvas = self.canvas();
+                    self.box_scene = BoxScene::FlippingFront {
+                        started: self.now(),
+                        from: boxview::BoxPose {
+                            center: [canvas.w / 2.0 + pan[0], canvas.h / 2.0 + pan[1]],
+                            scale: slot_ui::BOX_VIEW_SCALE * zoom,
+                            angle: std::f32::consts::PI,
+                        },
+                    };
                     true
                 }
                 _ => false,
@@ -2553,13 +2569,14 @@ impl App {
             }).into_iter().collect();
         }
         let here = self.shelf();
-        let screen = here.on_screen();
+        let radius = Shelf::box_visible_radius(self.canvas());
+        let screen = here.around(radius);
         let mut wants: Vec<(usize, usize)> = screen.iter().map(|i| (self.shelf_at, *i)).collect();
         for at in self.neighbour_shelves() {
-            wants.extend(self.shelves[at].1.on_screen().into_iter().map(|i| (at, i)));
+            wants.extend(self.shelves[at].1.around(radius).into_iter().map(|i| (at, i)));
         }
         wants.extend(
-            here.around(FACE_AHEAD)
+            here.around(FACE_AHEAD.max(radius + 2))
                 .into_iter()
                 .filter(|i| !screen.contains(i))
                 .map(|i| (self.shelf_at, i)),
@@ -2598,12 +2615,14 @@ impl App {
 
     pub fn shed_faces(&mut self) -> Vec<TexId> {
         let neighbours = self.neighbour_shelves();
+        let box_radius = (self.carousel_view == CarouselView::Boxes)
+            .then(|| Shelf::box_visible_radius(self.canvas()));
         let mut shed = std::mem::take(&mut self.orphaned);
         for (at, (_, shelf)) in self.shelves.iter_mut().enumerate() {
             let keep = if at == self.shelf_at {
-                shelf.around(FACE_KEEP)
+                shelf.around(box_radius.map_or(FACE_KEEP, |radius| FACE_KEEP.max(radius + 2)))
             } else if neighbours.contains(&at) {
-                shelf.on_screen()
+                box_radius.map_or_else(|| shelf.on_screen(), |radius| shelf.around(radius))
             } else {
                 Vec::new()
             };
@@ -2619,21 +2638,15 @@ impl App {
 
     pub fn shed_box_faces(&mut self) -> Vec<TexId> {
         let neighbours = self.neighbour_shelves();
-        let only_selected = self.box_scene_needs_only_selected();
+        let radius = Shelf::box_visible_radius(self.canvas());
         let mut shed = Vec::new();
         for (at, (_, shelf)) in self.shelves.iter_mut().enumerate() {
             let keep = if self.carousel_view == CarouselView::Cartridges {
                 Vec::new()
-            } else if only_selected {
-                if at == self.shelf_at {
-                    vec![shelf.index]
-                } else {
-                    Vec::new()
-                }
             } else if at == self.shelf_at {
-                shelf.around(FACE_KEEP)
+                shelf.around(FACE_KEEP.max(radius + 2))
             } else if neighbours.contains(&at) {
-                shelf.on_screen()
+                shelf.around(radius)
             } else {
                 Vec::new()
             };
@@ -5434,21 +5447,35 @@ impl App {
         if self.carousel_view != CarouselView::Boxes || self.box_scene == BoxScene::Carousel {
             return false;
         }
-        let Some((_, faces, (front_w, front_h, _))) = self.selected_box() else {
+        let Some((_, faces, (front_w, front_h, depth))) = self.selected_box() else {
             return false;
         };
         let canvas = self.canvas();
         let now = self.now();
         match self.box_scene {
-            BoxScene::FlippingBack { started } | BoxScene::FlippingFront { started } => {
+            BoxScene::FlippingBack { started, from } | BoxScene::FlippingFront { started, from } => {
                 let to_back = matches!(self.box_scene, BoxScene::FlippingBack { .. });
                 let t = (now.saturating_sub(started) as f32 / BOX_FLIP_MS as f32).clamp(0.0, 1.0);
-                let show_back = if to_back { t >= 0.5 } else { t < 0.5 };
-                let factor = (1.0 - 2.0 * t).abs().max(0.025);
-                let tex = if show_back { faces.back } else { faces.front };
-                let w = front_w * slot_ui::BOX_VIEW_SCALE * factor;
-                let h = front_h * slot_ui::BOX_VIEW_SCALE;
-                self.draw_box_texture(tex, (canvas.w - w) / 2.0, (canvas.h - h) / 2.0, w, h, 1.0, out);
+                let eased = t * t * (3.0 - 2.0 * t);
+                let (center, scale, angle) = if to_back {
+                    ([canvas.w / 2.0, canvas.h / 2.0], slot_ui::BOX_VIEW_SCALE, std::f32::consts::PI)
+                } else {
+                    self.shelf().selected_box_pose(canvas)
+                };
+                let center = [
+                    from.center[0] + (center[0] - from.center[0]) * eased,
+                    from.center[1] + (center[1] - from.center[1]) * eased,
+                ];
+                let scale = from.scale + (scale - from.scale) * eased;
+                let angle = from.angle + (angle - from.angle) * eased;
+                slot_ui::draw_rotated_box(
+                    faces,
+                    (front_w * scale, front_h * scale, depth * scale),
+                    angle,
+                    center,
+                    1.0,
+                    out,
+                );
             }
             BoxScene::Back { zoom, pan } => {
                 let w = front_w * slot_ui::BOX_VIEW_SCALE * zoom;
