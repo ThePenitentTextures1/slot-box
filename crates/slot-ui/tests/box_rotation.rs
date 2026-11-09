@@ -89,6 +89,57 @@ fn rotation_endpoints_show_the_expected_face_at_full_size() {
 }
 
 #[test]
+fn faces_turn_away_at_the_perspective_adjusted_angle() {
+    let tex = textures(0);
+    for size in [(200.0_f32, 180.0_f32, 40.0_f32), (140.0, 220.0, 30.0)] {
+        let camera = size.0.max(size.1).max(size.2) * 4.0;
+        for step in 0..=1800 {
+            let angle = PI * step as f32 / 1800.0;
+            let (sin, cos) = angle.sin_cos();
+            let camera_distance = camera + size.2 / 2.0 * (cos.abs() + sin);
+            let mut out = Vec::new();
+            draw_rotated_box(tex, size, angle, [300.0, 200.0], 1.0, &mut out);
+            assert!(!out.is_empty(), "nothing visible at {angle}");
+            for (id, facing) in [
+                (tex.side, camera_distance * sin - size.2 / 2.0),
+                (tex.front, camera_distance * cos - size.2 / 2.0),
+                (tex.back, -camera_distance * cos - size.2 / 2.0),
+            ] {
+                if facing.abs() > 0.001 {
+                    assert_eq!(
+                        out.iter().any(|draw| quad(draw).0 == id),
+                        facing > 0.0,
+                        "wrong face at {angle} for {size:?}"
+                    );
+                }
+            }
+            for draw in &out {
+                let (_, corners) = quad(draw);
+                assert!(corners[1][0] > corners[0][0], "back-facing face at {angle}");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_nearly_spine_on_box_does_not_draw_the_hidden_front_or_back() {
+    let tex = textures(0);
+    for degrees in [89.0_f32, 90.0, 91.0] {
+        let mut out = Vec::new();
+        draw_rotated_box(
+            tex,
+            (200.0, 180.0, 40.0),
+            degrees.to_radians(),
+            [300.0, 200.0],
+            1.0,
+            &mut out,
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(quad(&out[0]).0, tex.side);
+    }
+}
+
+#[test]
 fn face_depths_follow_the_same_projection_and_match_at_the_spine() {
     let tex = textures(0);
     let size = (200.0, 180.0, 40.0);

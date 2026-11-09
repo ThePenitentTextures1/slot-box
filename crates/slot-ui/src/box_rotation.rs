@@ -19,6 +19,43 @@ struct Projection {
     cos: f32,
 }
 
+struct ProjectedEdges {
+    spine_back: f32,
+    spine_front: f32,
+    front_edge: f32,
+    back_edge: f32,
+}
+
+impl ProjectedEdges {
+    fn spine_visible(&self) -> bool {
+        self.spine_front > self.spine_back
+    }
+
+    fn front_visible(&self) -> bool {
+        self.front_edge > self.spine_front
+    }
+
+    fn back_visible(&self) -> bool {
+        self.spine_back > self.back_edge
+    }
+
+    fn bounds(&self) -> (f32, f32) {
+        let mut min = f32::INFINITY;
+        let mut max = f32::NEG_INFINITY;
+        for (visible, a, b) in [
+            (self.spine_visible(), self.spine_back, self.spine_front),
+            (self.front_visible(), self.spine_front, self.front_edge),
+            (self.back_visible(), self.back_edge, self.spine_back),
+        ] {
+            if visible {
+                min = min.min(a).min(b);
+                max = max.max(a).max(b);
+            }
+        }
+        (min, max)
+    }
+}
+
 impl Projection {
     fn new((width, height, depth): (f32, f32, f32), angle: f32) -> Self {
         let (sin, cos) = angle.clamp(0.0, PI).sin_cos();
@@ -45,22 +82,13 @@ impl Projection {
         [rx * factor, y * factor]
     }
 
-    fn bounds(&self) -> (f32, f32) {
-        let seam_front = self.point(self.left, 0.0, self.front)[0];
-        let seam_back = self.point(self.left, 0.0, -self.front)[0];
-        let edge = self.point(
-            self.right,
-            0.0,
-            if self.cos >= 0.0 {
-                self.front
-            } else {
-                -self.front
-            },
-        )[0];
-        (
-            seam_back.min(seam_front).min(edge),
-            seam_back.max(seam_front).max(edge),
-        )
+    fn edges(&self) -> ProjectedEdges {
+        ProjectedEdges {
+            spine_front: self.point(self.left, 0.0, self.front)[0],
+            spine_back: self.point(self.left, 0.0, -self.front)[0],
+            front_edge: self.point(self.right, 0.0, self.front)[0],
+            back_edge: self.point(self.right, 0.0, -self.front)[0],
+        }
     }
 }
 
@@ -83,12 +111,15 @@ fn faces(textures: BoxFaceTextures, p: &Projection) -> Vec<Face> {
         tex,
     };
     let mut result = Vec::with_capacity(2);
-    if p.sin > 0.00001 {
+    // A projected face reverses winding when it turns away from the camera.
+    let edges = p.edges();
+    if edges.spine_visible() {
         result.push(quad((left, back), (left, front), textures.side));
     }
-    if p.cos > 0.00001 {
+    if edges.front_visible() {
         result.push(quad((left, front), (right, front), textures.front));
-    } else if p.cos < -0.00001 {
+    }
+    if edges.back_visible() {
         // Back art is read from the free edge toward the spine.
         result.push(quad((right, back), (left, back), textures.back));
     }
@@ -97,7 +128,7 @@ fn faces(textures: BoxFaceTextures, p: &Projection) -> Vec<Face> {
 
 /// Projected width of a box rotated about its spine-side pivot.
 pub fn box_rotation_width(size: (f32, f32, f32), angle: f32) -> f32 {
-    let (min, max) = Projection::new(size, angle).bounds();
+    let (min, max) = Projection::new(size, angle).edges().bounds();
     max - min
 }
 
@@ -111,7 +142,7 @@ pub fn draw_rotated_box(
     out: &mut Vec<Draw>,
 ) {
     let projection = Projection::new(size, angle);
-    let (min, max) = projection.bounds();
+    let (min, max) = projection.edges().bounds();
     let x = center[0] - (min + max) / 2.0;
     for face in faces(textures, &projection) {
         out.push(Draw::PerspectiveQuad {
