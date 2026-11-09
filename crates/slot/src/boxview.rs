@@ -5,9 +5,15 @@ use slot_ui::{BoxFaceTextures, Millis, MOUTH_H};
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Item { Cartridge, Box }
 #[derive(Copy, Clone, Debug, PartialEq)]
+pub struct BoxPose {
+    pub center: [f32; 2],
+    pub scale: f32,
+    pub angle: f32,
+}
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Scene {
-    Carousel, FlippingBack { started: Millis }, Back { zoom:f32, pan:[f32;2] },
-    FlippingFront { started:Millis }, Opening { started:Millis, from_back:bool },
+    Carousel, FlippingBack { started: Millis, from: BoxPose }, Back { zoom:f32, pan:[f32;2] },
+    FlippingFront { started:Millis, from: BoxPose }, Opening { started:Millis, from_back:bool },
     Open { item:Item }, Closing { started:Millis },
 }
 pub type BoxItem=Item;
