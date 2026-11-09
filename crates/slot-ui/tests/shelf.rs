@@ -30,7 +30,7 @@ fn placed(s: &Shelf) -> Vec<(f32, f32)> {
             Draw::Tex { x, w, .. } => (x, w),
             Draw::Part { x, w, .. } => (x, w),
             Draw::Turned { x, w, .. } => (x, w),
-            Draw::Game | Draw::Shot { .. } | Draw::Capture | Draw::Quad { .. } | Draw::Paper { .. } => (0.0, OUT_W as f32),
+            Draw::Game | Draw::Shot { .. } | Draw::Capture | Draw::Quad { .. } | Draw::PerspectiveQuad { .. } | Draw::Paper { .. } => (0.0, OUT_W as f32),
         })
         .collect()
 }
@@ -41,7 +41,7 @@ fn xw(d: &Draw) -> (f32, f32) {
         | Draw::Tex { x, w, .. }
         | Draw::Part { x, w, .. }
         | Draw::Turned { x, w, .. } => (x, w),
-        Draw::Game | Draw::Shot { .. } | Draw::Capture | Draw::Quad { .. } | Draw::Paper { .. } => (0.0, OUT_W as f32),
+        Draw::Game | Draw::Shot { .. } | Draw::Capture | Draw::Quad { .. } | Draw::PerspectiveQuad { .. } | Draw::Paper { .. } => (0.0, OUT_W as f32),
     }
 }
 
@@ -615,7 +615,7 @@ fn cart_spans(out: &[Draw]) -> Vec<(f32, f32)> {
             | Draw::Tex { x, w, h, .. }
             | Draw::Part { x, w, h, .. }
             | Draw::Turned { x, w, h, .. } => (h > 60.0).then_some((x, x + w)),
-            Draw::Game | Draw::Shot { .. } | Draw::Capture | Draw::Quad { .. } | Draw::Paper { .. } => None,
+            Draw::Game | Draw::Shot { .. } | Draw::Capture | Draw::Quad { .. } | Draw::PerspectiveQuad { .. } | Draw::Paper { .. } => None,
         })
         .filter(|(x0, x1)| *x1 > 0.0 && *x0 < OUT_W as f32)
         .collect()

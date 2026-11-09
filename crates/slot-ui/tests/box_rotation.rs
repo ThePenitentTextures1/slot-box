@@ -23,7 +23,7 @@ fn textures(id: usize) -> BoxFaceTextures {
 
 fn quad(draw: &Draw) -> (TexId, [[f32; 2]; 4]) {
     match *draw {
-        Draw::Quad { tex, corners, .. } => (tex, corners),
+        Draw::PerspectiveQuad { tex, corners, .. } => (tex, corners),
         _ => panic!("expected a textured face"),
     }
 }
@@ -85,6 +85,109 @@ fn rotation_endpoints_show_the_expected_face_at_full_size() {
         close(corners[1][0] - corners[0][0], width);
         close(corners[3][1] - corners[0][1], size.1);
         close(box_rotation_width(size, angle), width);
+    }
+}
+
+#[test]
+fn face_depths_follow_the_same_projection_and_match_at_the_spine() {
+    let tex = textures(0);
+    let size = (200.0, 180.0, 40.0);
+    for angle in [PI / 4.0, PI * 3.0 / 4.0] {
+        let mut out = Vec::new();
+        draw_rotated_box(tex, size, angle, [300.0, 200.0], 1.0, &mut out);
+        let Draw::PerspectiveQuad { depth: side, .. } = out[0] else {
+            panic!("expected perspective spine");
+        };
+        let Draw::PerspectiveQuad { depth: face, .. } = out[1] else {
+            panic!("expected perspective face");
+        };
+        let far = 1.0 + size.0 * angle.sin() / (size.0 * 4.0);
+        if angle < FRAC_PI_2 {
+            close(side[1], face[0]);
+            close(face[0], 1.0);
+            close(face[1], far);
+        } else {
+            close(side[0], face[1]);
+            close(face[1], 1.0);
+            close(face[0], far);
+        }
+        close(face[0], face[3]);
+        close(face[1], face[2]);
+    }
+
+    for angle in [0.0, FRAC_PI_2, PI] {
+        let mut out = Vec::new();
+        draw_rotated_box(tex, size, angle, [300.0, 200.0], 1.0, &mut out);
+        let Draw::PerspectiveQuad { depth, .. } = out[0] else {
+            panic!("expected perspective face");
+        };
+        for value in depth {
+            close(value, 1.0);
+        }
+    }
+}
+
+#[test]
+fn perspective_interpolation_preserves_artwork_on_both_triangles() {
+    let size = (200.0, 180.0, 40.0);
+    for angle in [PI / 4.0, PI * 3.0 / 4.0] {
+        let mut out = Vec::new();
+        draw_rotated_box(textures(0), size, angle, [300.0, 200.0], 1.0, &mut out);
+        let Draw::PerspectiveQuad { corners, depth, .. } = out[1] else {
+            panic!("expected perspective face");
+        };
+        let (sin, cos) = angle.sin_cos();
+        let camera = size.0 * 4.0;
+        let left = -size.2 / 2.0;
+        let right = size.0 + left;
+        let z = if angle < FRAC_PI_2 {
+            size.2 / 2.0
+        } else {
+            -size.2 / 2.0
+        };
+        let x_at = |u: f32| {
+            if angle < FRAC_PI_2 {
+                left + u * size.0
+            } else {
+                right - u * size.0
+            }
+        };
+        let project = |x: f32, y: f32| {
+            let distance = camera - (-x * sin + z * cos) + size.2 / 2.0 * (cos.abs() + sin);
+            [
+                (x * cos + z * sin) * camera / distance,
+                y * camera / distance,
+            ]
+        };
+        let origin_x = corners[0][0] - project(x_at(0.0), -size.1 / 2.0)[0];
+        let mut saw_affine_error = false;
+        for (u, v, indices) in [(0.28, 0.25, [0, 1, 3]), (0.72, 0.75, [1, 2, 3])] {
+            let p = project(x_at(u), (v - 0.5) * size.1);
+            let point = [p[0] + origin_x, p[1] + 200.0];
+            let [a, b, c] = indices.map(|i| corners[i]);
+            let cross = |a: [f32; 2], b: [f32; 2]| a[0] * b[1] - a[1] * b[0];
+            let sub = |a: [f32; 2], b: [f32; 2]| [a[0] - b[0], a[1] - b[1]];
+            let area = cross(sub(b, a), sub(c, a));
+            let wb = cross(sub(point, a), sub(c, a)) / area;
+            let wc = cross(sub(b, a), sub(point, a)) / area;
+            let weights = [1.0 - wb - wc, wb, wc];
+            assert!(weights.iter().all(|w| *w >= 0.0));
+            let uv = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+            let denom: f32 = (0..3).map(|i| weights[i] / depth[indices[i]]).sum();
+            for (axis, expected) in [(0, u), (1, v)] {
+                let corrected: f32 = (0..3)
+                    .map(|i| weights[i] * uv[indices[i]][axis] / depth[indices[i]])
+                    .sum::<f32>()
+                    / denom;
+                let affine: f32 = (0..3).map(|i| weights[i] * uv[indices[i]][axis]).sum();
+                close(corrected, expected);
+                saw_affine_error |= (affine - expected).abs() > 0.005;
+            }
+        }
+        assert!(
+            saw_affine_error,
+            "test must expose the original affine distortion"
+        );
     }
 }
 
@@ -191,7 +294,7 @@ fn row(shelf: &Shelf) -> Vec<(usize, [[f32; 2]; 4])> {
     let mut faces: Vec<_> = out
         .iter()
         .filter_map(|draw| match *draw {
-            Draw::Quad { tex, corners, .. } => (0..24)
+            Draw::PerspectiveQuad { tex, corners, .. } => (0..24)
                 .find(|i| TexId::from_raw(*i) == tex)
                 .map(|i| (i, corners)),
             _ => None,

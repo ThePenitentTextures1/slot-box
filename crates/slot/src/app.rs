@@ -813,7 +813,7 @@ pub(crate) fn shift_down(draws: &mut [Draw], dy: f32) {
             | Draw::Tex { y, .. }
             | Draw::Part { y, .. }
             | Draw::Turned { y, .. } => *y += dy,
-            Draw::Quad { corners, .. } => {
+            Draw::Quad { corners, .. } | Draw::PerspectiveQuad { corners, .. } => {
                 for c in corners {
                     c[1] += dy;
                 }

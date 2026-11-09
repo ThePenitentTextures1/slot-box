@@ -591,6 +591,7 @@ fn a_cart_in_flight_is_not_also_left_standing_on_the_shelf() {
             | Draw::Shot { .. }
             | Draw::Capture
             | Draw::Quad { .. }
+            | Draw::PerspectiveQuad { .. }
             | Draw::Paper { .. } => false,
         })
         .count();

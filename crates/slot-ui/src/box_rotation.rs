@@ -5,6 +5,7 @@ use crate::shelf::BoxFaceTextures;
 
 struct Face {
     corners: [[f32; 2]; 4],
+    depth: [f32; 4],
     tex: slot_gfx::TexId,
 }
 
@@ -32,11 +33,15 @@ impl Projection {
         }
     }
 
-    fn point(&self, x: f32, y: f32, z: f32) -> [f32; 2] {
+    fn distance(&self, x: f32, z: f32) -> f32 {
         // The red pivot is halfway between front and back, half a depth from the spine.
-        let rx = x * self.cos + z * self.sin;
         let rz = -x * self.sin + z * self.cos;
-        let factor = self.camera / (self.camera - rz + self.front * (self.cos.abs() + self.sin));
+        self.camera - rz + self.front * (self.cos.abs() + self.sin)
+    }
+
+    fn point(&self, x: f32, y: f32, z: f32) -> [f32; 2] {
+        let rx = x * self.cos + z * self.sin;
+        let factor = self.camera / self.distance(x, z);
         [rx * factor, y * factor]
     }
 
@@ -68,6 +73,12 @@ fn faces(textures: BoxFaceTextures, p: &Projection) -> Vec<Face> {
             p.point(b.0, -p.height / 2.0, b.1),
             p.point(b.0, p.height / 2.0, b.1),
             p.point(a.0, p.height / 2.0, a.1),
+        ],
+        depth: [
+            p.distance(a.0, a.1) / p.camera,
+            p.distance(b.0, b.1) / p.camera,
+            p.distance(b.0, b.1) / p.camera,
+            p.distance(a.0, a.1) / p.camera,
         ],
         tex,
     };
@@ -103,8 +114,9 @@ pub fn draw_rotated_box(
     let (min, max) = projection.bounds();
     let x = center[0] - (min + max) / 2.0;
     for face in faces(textures, &projection) {
-        out.push(Draw::Quad {
+        out.push(Draw::PerspectiveQuad {
             corners: face.corners.map(|p| [p[0] + x, p[1] + center[1]]),
+            depth: face.depth,
             tex: face.tex,
             uv: [0.0, 0.0, 1.0, 1.0],
             alpha,

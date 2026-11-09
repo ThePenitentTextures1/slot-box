@@ -37,6 +37,7 @@ uniform vec4 u_src;
 uniform float u_quad;
 uniform vec4 u_c01;
 uniform vec4 u_c23;
+uniform vec4 u_depth;
 varying vec2 v_uv;
 void main() {
     v_uv = u_src.xy + a_pos * u_src.zw;
@@ -49,7 +50,10 @@ void main() {
     vec2 bottom = mix(u_c23.zw, u_c23.xy, a_pos.x);
     vec2 quad_p = mix(top, bottom, a_pos.y);
     vec2 p = mix(flat_p, quad_p, u_quad) / u_target;
-    gl_Position = vec4(p.x * 2.0 - 1.0, 1.0 - p.y * 2.0, 0.0, 1.0);
+    float top_w = mix(u_depth.x, u_depth.y, a_pos.x);
+    float bottom_w = mix(u_depth.w, u_depth.z, a_pos.x);
+    float w = mix(top_w, bottom_w, a_pos.y);
+    gl_Position = vec4((p.x * 2.0 - 1.0) * w, (1.0 - p.y * 2.0) * w, 0.0, w);
 }
 "#;
 

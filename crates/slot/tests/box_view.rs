@@ -37,7 +37,7 @@ fn face(app: &App, tex: TexId) -> Option<[[f32; 2]; 4]> {
     app.draw(&mut out);
     out.iter()
         .filter_map(|draw| match *draw {
-            Draw::Quad {
+            Draw::PerspectiveQuad {
                 tex: t, corners, ..
             } if t == tex => Some(corners),
             Draw::Tex {
