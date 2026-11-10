@@ -111,6 +111,60 @@ fn flipping_while_scrolling_starts_at_the_current_box_pose() {
 }
 
 #[test]
+fn closing_footer_fades_only_after_the_box_reaches_the_carousel() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    let mut app = setup(root.path());
+    let plugged = TexId::from_raw(6000);
+    let legends: Vec<_> = (0..5).map(|i| (TexId::from_raw(6010 + i), 70)).collect();
+    app.set_plugged_face(plugged);
+    app.set_open_box_legends([legends.clone(), legends.clone()]);
+    let carousel = face(&app, textures(1000).front).unwrap();
+    open(&mut app);
+    app.apply(Action::GbaDown(Btn::B));
+    app.update(1.70);
+    let alpha = |app: &App| frame(app).iter().find_map(|d| match d {
+        Draw::Part { tex, alpha, .. } if *tex == plugged => Some(*alpha),
+        _ => None,
+    });
+    assert_eq!(alpha(&app), Some(1.0));
+    assert!(frame(&app).iter().any(|d| matches!(d, Draw::Tex { tex, .. } if *tex == legends[0].0)));
+    app.update(0.11);
+    equal_pose(carousel, face(&app, textures(1000).front).unwrap());
+    assert!(alpha(&app).is_some_and(|a| a > 0.9));
+    app.update(0.07);
+    equal_pose(carousel, face(&app, textures(1000).front).unwrap());
+    assert!(alpha(&app).is_some_and(|a| (a - 0.5).abs() < 0.02));
+    app.update(0.09);
+    assert_eq!(alpha(&app), None);
+    common::through(&mut app, Btn::Right);
+    assert_eq!(app.selected_stem(), Some("Beta"));
+}
+
+#[test]
+fn r2_does_not_leave_carousel_box_inspection() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    let mut app = setup(root.path());
+    common::through(&mut app, Btn::Select);
+    app.update(0.33);
+    let back = face(&app, textures(1000).back).unwrap();
+    common::through(&mut app, Btn::R2);
+    app.update(0.4);
+    equal_pose(back, face(&app, textures(1000).back).unwrap());
+    app.apply(Action::GbaDown(Btn::R1));
+    app.update(0.3);
+    app.apply(Action::GbaUp(Btn::R1));
+    let zoomed = face(&app, textures(1000).back).unwrap();
+    common::through(&mut app, Btn::R2);
+    app.update(0.4);
+    equal_pose(zoomed, face(&app, textures(1000).back).unwrap());
+    common::through(&mut app, Btn::B);
+    app.update(1.0);
+    common::through(&mut app, Btn::B);
+    app.update(0.33);
+    assert!(face(&app, textures(1000).front).is_some());
+}
+
+#[test]
 fn carousel_inspection_returns_on_horizontal_navigation() {
     let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
     let mut app = setup(root.path());
@@ -169,11 +223,50 @@ fn box_waits_for_cartridge_to_be_put_down_before_rising() {
     assert!(shrinking[1][0] - shrinking[0][0] < picked[1][0] - picked[0][0]);
     app.update(0.03);
     equal_pose(parked, face(&app, textures(1000).front).unwrap());
-    app.update(0.06);
+    app.update(0.41);
     let raised = face(&app, textures(1000).front).unwrap();
     let down = face(&app, TexId::from_raw(2000)).unwrap();
     assert!(raised[0][1] < parked[0][1]);
     assert!(((down[1][0] - down[0][0]) / (raised[1][0] - raised[0][0]) - 60.0 / 125.0).abs() < 0.001);
+}
+
+#[test]
+fn cartridge_and_box_selection_move_in_smooth_stages_in_both_directions() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    let mut app = setup(root.path());
+    open(&mut app);
+    let cart = TexId::from_raw(2000);
+    let box_tex = textures(1000).front;
+    let picked = face(&app, cart).unwrap();
+    let parked = face(&app, box_tex).unwrap();
+    app.apply(Action::GbaDown(Btn::Down));
+    app.update(0.1);
+    let partial = face(&app, cart).unwrap();
+    equal_pose(parked, face(&app, box_tex).unwrap());
+    app.update(0.1);
+    let put_down = face(&app, cart).unwrap();
+    assert!(picked[1][0] - picked[0][0] > partial[1][0] - partial[0][0]);
+    assert!(partial[1][0] - partial[0][0] > put_down[1][0] - put_down[0][0]);
+    app.update(0.2);
+    equal_pose(parked, face(&app, box_tex).unwrap());
+    app.update(0.2);
+    let halfway = face(&app, box_tex).unwrap();
+    app.update(0.2);
+    let raised = face(&app, box_tex).unwrap();
+    assert!(raised[0][1] < halfway[0][1] && halfway[0][1] < parked[0][1]);
+    app.apply(Action::GbaDown(Btn::Up));
+    app.update(0.2);
+    equal_pose(halfway, face(&app, box_tex).unwrap());
+    let small = face(&app, cart).unwrap();
+    assert!(((small[1][0] - small[0][0]) - (put_down[1][0] - put_down[0][0])).abs() < 0.001);
+    app.update(0.2);
+    equal_pose(parked, face(&app, box_tex).unwrap());
+    app.update(0.2);
+    equal_pose(put_down, face(&app, cart).unwrap());
+    app.update(0.1);
+    equal_pose(partial, face(&app, cart).unwrap());
+    app.update(0.1);
+    equal_pose(picked, face(&app, cart).unwrap());
 }
 
 #[test]
@@ -262,7 +355,6 @@ fn picked_up_cartridges_are_in_front_of_the_parked_box() {
         common::tmp_root_with_gbc_carts(&["Alpha", "Beta"]),
     ] {
         let mut app = setup(root.path());
-        open(&mut app);
         let check_order = |app: &App, box_first: bool| {
             let out = frame(app);
             let box_at = out.iter().position(|d| matches!(d, Draw::PerspectiveQuad { tex, .. }
@@ -271,11 +363,23 @@ fn picked_up_cartridges_are_in_front_of_the_parked_box() {
                 if *tex == TexId::from_raw(2000))).unwrap();
             assert_eq!(box_at < cart_at, box_first);
         };
+        common::through(&mut app, Btn::A);
+        app.update(1.87);
+        check_order(&app, false);
+        app.update(0.1);
         check_order(&app, true);
         app.apply(Action::GbaDown(Btn::Down));
         app.update(0.3);
         check_order(&app, true);
+        app.update(0.35);
+        check_order(&app, false);
+        app.apply(Action::GbaDown(Btn::Up));
+        app.update(0.05);
+        check_order(&app, false);
+        app.update(0.45);
+        check_order(&app, true);
         app.apply(Action::GbaDown(Btn::B));
+        check_order(&app, false);
         app.update(0.3);
         check_order(&app, false);
     }
@@ -475,7 +579,13 @@ fn flap_unfolds_in_layers_and_folds_back_in_reverse() {
 
     app.update(1.0);
     app.apply(Action::GbaDown(Btn::B));
-    app.update(0.54);
+    app.update(0.36);
+    let closing_tab = draw(&app);
+    let outside = part(&closing_tab, 0.0).unwrap();
+    let cartridge = closing_tab.iter().position(|d| matches!(d, Draw::Tex { tex, .. } if *tex == cart)).unwrap();
+    let box_index = closing_tab.iter().position(|d| matches!(d, Draw::PerspectiveQuad { tex, .. } if *tex == box_front)).unwrap();
+    assert!(outside < cartridge && cartridge < box_index);
+    app.update(0.18);
     let closing_open = draw(&app);
     assert!(part(&closing_open, 1.0 / 3.0).is_some());
     app.update(0.86);

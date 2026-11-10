@@ -121,6 +121,7 @@ const BOX_FLIP_MS: Millis = 320;
 const BOX_BAR_FADE_MS: Millis = 160;
 const BOX_OPEN_MS: Millis = 1800;
 const BOX_CLOSE_MS: Millis = 1800;
+const BOX_FOCUS_SPEED: f32 = 1.25;
 const BACK_ZOOM_MAX: f32 = 4.0;
 const LINK_TEXT_Y: f32 = 44.0;
 const LINK_LEGEND_Y: f32 = OUT_H as f32 - MOUTH_H;
@@ -2461,7 +2462,7 @@ impl App {
                 }
             }
             BoxScene::Closing { started }
-                if now.saturating_sub(started) >= BOX_CLOSE_MS =>
+                if now.saturating_sub(started) >= BOX_CLOSE_MS + BOX_BAR_FADE_MS =>
             {
                 BoxScene::Carousel
             }
@@ -2499,11 +2500,12 @@ impl App {
         };
         if !inspecting {
             let target = if item == BoxItem::Box { 1.0 } else { 0.0 };
-            let blend = 1.0 - (-8.0 * dt.max(0.0)).exp();
-            self.box_focus += (target - self.box_focus) * blend;
-            if (self.box_focus - target).abs() < 0.001 {
-                self.box_focus = target;
-            }
+            let step = BOX_FOCUS_SPEED * dt.max(0.0);
+            self.box_focus = if target > self.box_focus {
+                (self.box_focus + step).min(target)
+            } else {
+                (self.box_focus - step).max(target)
+            };
             if item == BoxItem::Cartridge && self.box_focus == 0.0 && self.on_shelf() {
                 match self.box_pending.take() {
                     Some(BoxCartAction::Play(clean)) => self.insert(clean),
@@ -2678,7 +2680,7 @@ impl App {
                     self.box_buttons = [false; 6];
                     true
                 }
-                Action::GbaDown(Btn::B | Btn::R2) => {
+                Action::GbaDown(Btn::B) => {
                     self.return_from_box_inspection(zoom, pan);
                     true
                 }
@@ -5748,6 +5750,16 @@ impl App {
                     alpha: 1.0,
                     uv: [0.0, 1.0 / 3.0, 1.0, 1.0 / 3.0],
                 });
+            } else if fold > 0.001 {
+                out.push(Draw::Part {
+                    x: center[0] - w / 2.0,
+                    y: hinge_y,
+                    w,
+                    h: fold * lid_h,
+                    tex,
+                    alpha: 1.0,
+                    uv: [0.0, 0.0, 1.0, 1.0 / 3.0],
+                });
             }
         }
         let draw_box = |out: &mut Vec<Draw>| {
@@ -5760,7 +5772,9 @@ impl App {
                 out,
             );
         };
-        if p >= 0.90 {
+        let box_behind_cart = matches!(self.box_scene, BoxScene::Open { .. })
+            && self.box_focus <= 0.5;
+        if box_behind_cart {
             draw_box(out);
         }
         if extraction > 0.0 {
@@ -5782,21 +5796,7 @@ impl App {
                 height,
             ], out);
         }
-        if let Some(tex) = flap_tex {
-            let fold = (std::f32::consts::PI * tab).cos();
-            if fold > 0.001 {
-                out.push(Draw::Part {
-                    x: center[0] - w / 2.0,
-                    y: hinge_y,
-                    w,
-                    h: fold * lid_h,
-                    tex,
-                    alpha: 1.0,
-                    uv: [0.0, 0.0, 1.0, 1.0 / 3.0],
-                });
-            }
-        }
-        if p < 0.90 {
+        if !box_behind_cart {
             draw_box(out);
         }
     }
@@ -5988,7 +5988,7 @@ impl App {
                     BoxScene::FlippingFront { started, .. } =>
                         (1.0 - self.now().saturating_sub(started) as f32 / BOX_FLIP_MS as f32).clamp(0.0, 1.0),
                     BoxScene::Closing { started } =>
-                        ((BOX_CLOSE_MS as f32 - self.now().saturating_sub(started) as f32) / BOX_BAR_FADE_MS as f32).clamp(0.0, 1.0),
+                        (1.0 - self.now().saturating_sub(started + BOX_CLOSE_MS) as f32 / BOX_BAR_FADE_MS as f32).clamp(0.0, 1.0),
                     BoxScene::Open { .. } | BoxScene::Back { .. } | BoxScene::PreparingClose { .. } => 1.0,
                     BoxScene::Carousel => 0.0,
                 };
@@ -6012,6 +6012,10 @@ impl App {
                                 BoxScene::Open { item: BoxItem::Box } => {
                                     let back = if self.box_zoom > 1.001 { legends[4] } else { legends[0] };
                                     self.draw_spread_legends(&[back, legends[1], legends[3]], LINK_LEGEND_Y, bar_alpha, out);
+                                }
+                                BoxScene::PreparingClose { .. } | BoxScene::Closing { .. } => {
+                                    let action = if self.box_focus > 0.5 { legends[3] } else { legends[2] };
+                                    self.draw_spread_legends(&[legends[0], legends[1], action], LINK_LEGEND_Y, bar_alpha, out);
                                 }
                                 BoxScene::Back { zoom, .. } => {
                                     let back = if zoom > 1.001 { legends[4] } else { legends[0] };
