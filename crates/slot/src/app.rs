@@ -118,10 +118,12 @@ const SLOT_NAME_OUT_MS: Millis = 800;
 const SLOT_NAME_ALPHA: f32 = 1.0;
 const CORE_PICKER_DIM: f32 = 0.25 / (1.0 - CORE_PICKER_RECEDE);
 const BOX_FLIP_MS: Millis = 320;
-const BOX_BAR_FADE_MS: Millis = 160;
-const BOX_OPEN_MS: Millis = 1800;
+const BOX_BAR_FADE_MS: Millis = 120;
+const BOX_OPEN_MS: Millis = 1650;
 const BOX_CLOSE_MS: Millis = 1800;
-const BOX_FOCUS_SPEED: f32 = 1.25;
+const BOX_FOCUS_SPEED: f32 = 1.0 / 0.6;
+const BOX_FOCUS_CART_DOWN: f32 = 150.0 / 600.0;
+const BOX_FOCUS_BOX_MOVE: f32 = 320.0 / 600.0;
 const BACK_ZOOM_MAX: f32 = 4.0;
 const LINK_TEXT_Y: f32 = 44.0;
 const LINK_LEGEND_Y: f32 = OUT_H as f32 - MOUTH_H;
@@ -2614,7 +2616,7 @@ impl App {
                     return false;
                 }
                 match action {
-                    Action::GbaDown(Btn::L2) | Action::SelectTap => {
+                    Action::SelectTap => {
                         let (center, scale, angle) = self.shelf().selected_box_pose(self.canvas());
                         self.play_held = None;
                         self.held_dir = None;
@@ -5698,20 +5700,22 @@ impl App {
         let canvas = self.canvas();
         let p = progress.clamp(0.0, 1.0);
         let smooth = |t: f32| { let t = t.clamp(0.0, 1.0); t * t * (3.0 - 2.0 * t) };
-        let travel = smooth(p / 0.20);
-        let extraction = smooth((p - 0.36) / 0.30);
-        let move_to_center = smooth((p - 0.78) / 0.12)
-            * (1.0 - smooth((self.box_focus - 0.25) * 4.0));
-        let pickup = smooth((p - 0.90) / 0.10)
-            * (1.0 - smooth(self.box_focus * 4.0));
-        let flap = smooth((p - 0.16) / 0.24) * (1.0 - smooth((p - 0.67) / 0.21));
+        let ms = p * BOX_OPEN_MS as f32;
+        let travel = smooth(ms / 280.0);
+        let extraction = smooth((ms - 710.0) / 420.0);
+        let move_to_center = smooth((ms - 1330.0) / 170.0)
+            * (1.0 - smooth((self.box_focus - BOX_FOCUS_CART_DOWN) / (BOX_FOCUS_BOX_MOVE - BOX_FOCUS_CART_DOWN)));
+        let pickup = smooth((ms - 1500.0) / 150.0)
+            * (1.0 - smooth(self.box_focus / BOX_FOCUS_CART_DOWN));
+        let flap = smooth((ms - 280.0) / 430.0)
+            * (1.0 - smooth((ms - 1130.0) / 370.0));
         let lid = (std::f32::consts::FRAC_PI_2 * smooth(flap * 2.0)).sin();
         let tab = smooth((flap - 0.5) * 2.0);
         let scale = slot_ui::BOX_VIEW_SCALE;
         let (w, h) = (front_w * scale, front_h * scale);
         let selected_y = canvas.h / 2.0;
         let parked_y = canvas.h + h * 0.15;
-        let box_y = parked_y + (selected_y - parked_y) * smooth((self.box_focus - 0.5) * 2.0);
+        let box_y = parked_y + (selected_y - parked_y) * smooth((self.box_focus - BOX_FOCUS_BOX_MOVE) / (1.0 - BOX_FOCUS_BOX_MOVE));
         let origin = if matches!(self.box_scene, BoxScene::Closing { .. }) {
             let (center, scale, angle) = self.shelf().selected_box_pose(canvas);
             boxview::BoxPose { center, scale, angle }
@@ -5772,8 +5776,11 @@ impl App {
                 out,
             );
         };
-        let box_behind_cart = matches!(self.box_scene, BoxScene::Open { .. })
-            && self.box_focus <= 0.5;
+        let box_behind_cart = match self.box_scene {
+            BoxScene::Opening { .. } | BoxScene::QuickOpening { .. } => ms >= 1500.0,
+            BoxScene::Open { .. } => self.box_focus <= BOX_FOCUS_BOX_MOVE,
+            _ => false,
+        };
         if box_behind_cart {
             draw_box(out);
         }
@@ -6003,19 +6010,21 @@ impl App {
                             colour,
                         });
                     }
+                    slot_ui::draw_slot_back(self.canvas(), self.slot_faces, bar_alpha, out);
+                    slot_ui::draw_slot_front(self.canvas(), self.slot_faces, bar_alpha, out);
                     if self.core_picker_shown().is_none() {
                         let legends = &self.open_box_legends[usize::from(self.light())];
                         if legends.len() == 5 {
                             match self.box_scene {
                                 BoxScene::Opening { .. } | BoxScene::Open { item: BoxItem::Cartridge } =>
-                                    self.draw_spread_legends(&[legends[0], legends[1], legends[2]], LINK_LEGEND_Y, bar_alpha, out),
+                                    self.draw_spread_legends(&[legends[1], legends[2]], LINK_LEGEND_Y, bar_alpha, out),
                                 BoxScene::Open { item: BoxItem::Box } => {
-                                    let back = if self.box_zoom > 1.001 { legends[4] } else { legends[0] };
-                                    self.draw_spread_legends(&[back, legends[1], legends[3]], LINK_LEGEND_Y, bar_alpha, out);
+                                    let left = if self.box_zoom > 1.001 { legends[4] } else { legends[1] };
+                                    self.draw_spread_legends(&[left, legends[3]], LINK_LEGEND_Y, bar_alpha, out);
                                 }
                                 BoxScene::PreparingClose { .. } | BoxScene::Closing { .. } => {
-                                    let action = if self.box_focus > 0.5 { legends[3] } else { legends[2] };
-                                    self.draw_spread_legends(&[legends[0], legends[1], action], LINK_LEGEND_Y, bar_alpha, out);
+                                    let action = if self.box_focus > BOX_FOCUS_BOX_MOVE { legends[3] } else { legends[2] };
+                                    self.draw_spread_legends(&[legends[1], action], LINK_LEGEND_Y, bar_alpha, out);
                                 }
                                 BoxScene::Back { zoom, .. } => {
                                     let back = if zoom > 1.001 { legends[4] } else { legends[0] };
