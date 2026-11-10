@@ -282,7 +282,7 @@ fn assemble(
     let scale = fh as f32;
     let pivot_x = bw as f32 * scale / bh as f32 + sw as f32 * scale / sh as f32;
     let front_width = fw as f32 * scale / fh as f32;
-    let flap = flap_face(&side, sw, sh)?;
+    let flap = flap_face(&back, bw, bh)?;
     Some(BoxFaceArt {
         front: CartFace { rgba: front, w: fw, h: fh },
         side: CartFace { rgba: side, w: sw, h: sh },
@@ -307,7 +307,7 @@ fn load_texture_atlas(path: &Path) -> Option<BoxFaceArt> {
     let side = crop(&rgba, w, h, face_w, side_w)?;
     let front_x = face_w.checked_add(side_w)?;
     let front = crop(&rgba, w, h, front_x, face_w)?;
-    let flap = flap_face(&side, side_w, h)?;
+    let flap = flap_face(&back, face_w, h)?;
     Some(BoxFaceArt {
         front: CartFace { rgba: front, w: face_w, h },
         side: CartFace { rgba: side, w: side_w, h },
@@ -319,9 +319,12 @@ fn load_texture_atlas(path: &Path) -> Option<BoxFaceArt> {
     })
 }
 
-fn flap_face(side: &[u8], width: u32, height: u32) -> Option<CartFace> {
-    let offset = (height as usize / 2).checked_mul(width as usize)?.checked_mul(4)?;
-    let colour = side.get(offset..offset + 3)?;
+fn flap_face(back: &[u8], width: u32, height: u32) -> Option<CartFace> {
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let offset = (width as usize / 2).checked_mul(4)?;
+    let colour = back.get(offset..offset + 3)?;
     let (mut rgba, w, h) = slot_ui::decode_png_bytes(include_bytes!("../assets/box_flap.png"))
         .or_else(|| {
             eprintln!("slot: box flap: could not decode embedded artwork");
@@ -331,7 +334,6 @@ fn flap_face(side: &[u8], width: u32, height: u32) -> Option<CartFace> {
         if pixel[1] > 200 && pixel[0] < 40 && pixel[2] < 40 {
             pixel[..3].copy_from_slice(colour);
         }
-
     }
     Some(CartFace { rgba, w, h })
 }
@@ -341,13 +343,44 @@ mod flap_tests {
     use super::*;
 
     #[test]
-    fn flap_uses_the_left_middle_side_pixel_and_keeps_cardboard_white() {
-        let mut side = vec![0; 2 * 3 * 4];
-        side[8..12].copy_from_slice(&[42, 87, 136, 255]);
-        let flap = flap_face(&side, 2, 3).unwrap();
+    fn flap_uses_the_top_center_back_pixel_and_keeps_cardboard_white() {
+        let mut back = vec![0; 3 * 2 * 4];
+        back[4..8].copy_from_slice(&[42, 87, 136, 255]);
+        back[12..16].copy_from_slice(&[1, 2, 3, 255]);
+        let flap = flap_face(&back, 3, 2).unwrap();
         let pixel = |x: usize, y: usize| &flap.rgba[(y * flap.w as usize + x) * 4..][..4];
         assert_eq!(pixel(350, 10), &[42, 87, 136, 255]);
         assert_eq!(pixel(350, 150), &[255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn separate_art_samples_the_back_not_the_spine() {
+        let front = (vec![255; 4 * 3 * 4], 4, 3);
+        let side = (vec![10; 2 * 3 * 4], 2, 3);
+        let mut back = vec![0; 4 * 3 * 4];
+        back[8..12].copy_from_slice(&[12, 34, 56, 255]);
+        let art = assemble(front, side, (back, 4, 3)).unwrap();
+        let offset = (10 * art.flap.w as usize + 350) * 4;
+        assert_eq!(&art.flap.rgba[offset..offset + 3], &[12, 34, 56]);
+    }
+
+    #[test]
+    fn atlas_samples_the_top_center_of_the_cropped_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("texture.png");
+        let mut pixels = vec![0; 7 * 3 * 4];
+        pixels[4..8].copy_from_slice(&[21, 43, 65, 255]);
+        pixels[12..16].copy_from_slice(&[99, 99, 99, 255]);
+        {
+            let file = std::fs::File::create(&path).unwrap();
+            let mut encoder = png::Encoder::new(file, 7, 3);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder.write_header().unwrap().write_image_data(&pixels).unwrap();
+        }
+        let art = load_texture_atlas(&path).unwrap();
+        let offset = (10 * art.flap.w as usize + 350) * 4;
+        assert_eq!(&art.flap.rgba[offset..offset + 3], &[21, 43, 65]);
     }
 }
 

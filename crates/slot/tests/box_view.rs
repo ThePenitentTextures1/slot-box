@@ -150,6 +150,81 @@ fn open(app: &mut App) {
 }
 
 #[test]
+fn flap_unfolds_in_layers_and_folds_back_in_reverse() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    let mut app = setup(root.path());
+    let flap = TexId::from_raw(4000);
+    let cart = TexId::from_raw(2000);
+    let box_front = textures(1000).front;
+    let draw = |app: &App| {
+        let mut out = Vec::new();
+        app.draw(&mut out);
+        out
+    };
+    let part = |draws: &[Draw], v: f32| {
+        draws.iter().position(|draw| matches!(draw,
+            Draw::Part { tex, uv, .. } if *tex == flap && (uv[1] - v).abs() < 0.0001
+        ))
+    };
+    app.apply(Action::GbaDown(Btn::A));
+    app.apply(Action::GbaUp(Btn::A));
+    app.update(0.288);
+    let folded = draw(&app);
+    let lid = part(&folded, 2.0 / 3.0).unwrap();
+    let outside = part(&folded, 0.0).unwrap();
+    assert!(lid < outside);
+    assert!(part(&folded, 1.0 / 3.0).is_none());
+    if let (Draw::Part { y: ly, h: lh, .. }, Draw::Part { y: ty, h: th, uv, .. }) =
+        (&folded[lid], &folded[outside])
+    {
+        assert!((ly - ty).abs() < 0.001 && (lh - th).abs() < 0.001);
+        assert!((uv[3] - 1.0 / 3.0).abs() < 0.001);
+    } else {
+        panic!("expected lid and tab");
+    }
+
+    app.update(0.065);
+    let before_turn = draw(&app);
+    let outer = part(&before_turn, 0.0).unwrap();
+    assert!(part(&before_turn, 1.0 / 3.0).is_none());
+    if let Draw::Part { h, .. } = before_turn[outer] {
+        assert!(h < 8.0);
+    }
+    app.update(0.002);
+    let after_turn = draw(&app);
+    let inner = part(&after_turn, 1.0 / 3.0).unwrap();
+    assert!(part(&after_turn, 0.0).is_none());
+    if let Draw::Part { h, .. } = after_turn[inner] {
+        assert!(h < 8.0);
+    }
+    app.update(0.125);
+    let opened = draw(&app);
+    let lid = part(&opened, 2.0 / 3.0).unwrap();
+    let inside = part(&opened, 1.0 / 3.0).unwrap();
+    let cartridge = opened.iter().position(|d| matches!(d, Draw::Tex { tex, .. } if *tex == cart)).unwrap();
+    let box_index = opened.iter().position(|d| matches!(d, Draw::PerspectiveQuad { tex, .. } if *tex == box_front)).unwrap();
+    assert!(lid < inside && inside < cartridge && cartridge < box_index);
+    assert!(part(&opened, 0.0).is_none());
+    if let (Draw::Part { y: ly, h: lh, .. }, Draw::Part { y: ty, h: th, .. }) =
+        (&opened[lid], &opened[inside])
+    {
+        assert!((ty + th - ly).abs() < 0.001 && (lh - th).abs() < 0.001);
+    } else {
+        panic!("expected lid and tab");
+    }
+
+    app.update(0.73);
+    app.apply(Action::GbaDown(Btn::B));
+    app.update(0.72);
+    let closing_open = draw(&app);
+    assert!(part(&closing_open, 1.0 / 3.0).is_some());
+    app.update(0.192);
+    let closing_folded = draw(&app);
+    assert!(part(&closing_folded, 0.0).is_some());
+    assert!(part(&closing_folded, 1.0 / 3.0).is_none());
+}
+
+#[test]
 fn cartridge_actions_wait_until_it_is_picked_up() {
     let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
     let mut app = setup(root.path());

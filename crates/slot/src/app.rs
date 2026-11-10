@@ -5679,6 +5679,8 @@ impl App {
         let pickup = smooth((p - 0.90) / 0.10)
             * (1.0 - smooth(self.box_focus / 0.5));
         let flap = smooth((p - 0.20) / 0.14) * (1.0 - smooth((p - 0.68) / 0.14));
+        let lid = smooth(flap * 2.0);
+        let tab = smooth((flap - 0.5) * 2.0);
         let scale = slot_ui::BOX_VIEW_SCALE;
         let (w, h) = (front_w * scale, front_h * scale);
         let selected_y = canvas.h / 2.0;
@@ -5697,6 +5699,33 @@ impl App {
         ];
         let face_scale = (origin.scale + (scale - origin.scale) * travel) * zoom;
         let angle = origin.angle * (1.0 - travel) + self.box_turn * travel;
+        let flap_tex = faces.flap.filter(|_| lid > 0.001);
+        let lid_h = w * (88.0 / 700.0) * lid;
+        let hinge_y = center[1] - h / 2.0 - lid_h;
+        if let Some(tex) = flap_tex {
+            out.push(Draw::Part {
+                x: center[0] - w / 2.0,
+                y: hinge_y,
+                w,
+                h: lid_h,
+                tex,
+                alpha: 1.0,
+                uv: [0.0, 2.0 / 3.0, 1.0, 1.0 / 3.0],
+            });
+            let fold = (std::f32::consts::PI * tab).cos();
+            if fold < -0.001 {
+                let tab_h = -fold * lid_h;
+                out.push(Draw::Part {
+                    x: center[0] - w / 2.0,
+                    y: hinge_y - tab_h,
+                    w,
+                    h: tab_h,
+                    tex,
+                    alpha: 1.0,
+                    uv: [0.0, 1.0 / 3.0, 1.0, 1.0 / 3.0],
+                });
+            }
+        }
         if extraction > 0.0 {
             let (small_w, small_h) = slot_ui::loose_cart_dimensions(cart);
             let (small_w, small_h) = (small_w * scale, small_h * scale);
@@ -5716,17 +5745,19 @@ impl App {
                 height,
             ], out);
         }
-        if let Some(tex) = faces.flap.filter(|_| flap > 0.001) {
-            let flap_h = w * (264.0 / 700.0) * flap;
-            out.push(Draw::Part {
-                x: center[0] - w / 2.0,
-                y: center[1] - h / 2.0 - flap_h,
-                w,
-                h: flap_h,
-                tex,
-                alpha: 1.0,
-                uv: [0.0, 0.0, 1.0, 1.0],
-            });
+        if let Some(tex) = flap_tex {
+            let fold = (std::f32::consts::PI * tab).cos();
+            if fold > 0.001 {
+                out.push(Draw::Part {
+                    x: center[0] - w / 2.0,
+                    y: hinge_y,
+                    w,
+                    h: fold * lid_h,
+                    tex,
+                    alpha: 1.0,
+                    uv: [0.0, 0.0, 1.0, 1.0 / 3.0],
+                });
+            }
         }
         slot_ui::draw_rotated_box(
             faces,
