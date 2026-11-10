@@ -149,6 +149,158 @@ fn open(app: &mut App) {
     app.update(1.21);
 }
 
+fn frame(app: &App) -> Vec<Draw> {
+    let mut draws = Vec::new();
+    app.draw(&mut draws);
+    draws
+}
+
+#[test]
+fn box_waits_for_cartridge_to_be_put_down_before_rising() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    let mut app = setup(root.path());
+    open(&mut app);
+    let parked = face(&app, textures(1000).front).unwrap();
+    let picked = face(&app, TexId::from_raw(2000)).unwrap();
+    app.apply(Action::GbaDown(Btn::Down));
+    app.update(0.01);
+    equal_pose(parked, face(&app, textures(1000).front).unwrap());
+    let shrinking = face(&app, TexId::from_raw(2000)).unwrap();
+    assert!(shrinking[1][0] - shrinking[0][0] < picked[1][0] - picked[0][0]);
+    app.update(0.03);
+    equal_pose(parked, face(&app, textures(1000).front).unwrap());
+    app.update(0.03);
+    let raised = face(&app, textures(1000).front).unwrap();
+    let down = face(&app, TexId::from_raw(2000)).unwrap();
+    assert!(raised[0][1] < parked[0][1]);
+    assert!(((down[1][0] - down[0][0]) / (raised[1][0] - raised[0][0]) - 60.0 / 125.0).abs() < 0.001);
+}
+
+#[test]
+fn open_box_footer_covers_slot_box_and_status_before_legends() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    let mut app = setup(root.path());
+    let plugged = TexId::from_raw(6000);
+    let clock = TexId::from_raw(6001);
+    let legends: Vec<_> = (0..5).map(|i| (TexId::from_raw(6010 + i), 70)).collect();
+    app.set_plugged_face(plugged);
+    app.set_shelf_clock_face(clock, 60);
+    app.set_open_box_legends([legends.clone(), legends.clone()]);
+    open(&mut app);
+    let out = frame(&app);
+    let index = |tex| out.iter().position(|d| match d {
+        Draw::Tex { tex: t, .. } | Draw::Part { tex: t, .. }
+        | Draw::PerspectiveQuad { tex: t, .. } => *t == tex,
+        _ => false,
+    }).unwrap();
+    let bar = index(plugged);
+    assert!(index(clock) < bar);
+    assert!(index(textures(1000).front) < bar);
+    assert!(bar < index(legends[0].0) && bar < index(legends[1].0));
+    assert!(matches!(out[bar], Draw::Part { y, h, alpha: 1.0, .. }
+        if y == slot_ui::OUT_H as f32 - slot_ui::MOUTH_H && h == slot_ui::MOUTH_H));
+}
+
+#[test]
+fn picker_keeps_carousel_and_box_without_duplicate_cartridge() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    let mut app = setup(root.path());
+    open(&mut app);
+    let before = frame(&app);
+    let box_tex = textures(1000).front;
+    let neighbour = textures(1003).side;
+    let selected = TexId::from_raw(2000);
+    let lid = TexId::from_raw(6101);
+    app.set_core_board_faces(TexId::from_raw(6100), lid);
+    app.apply(Action::GbaDown(Btn::Start));
+    app.update(0.2);
+    let out = frame(&app);
+    assert!(out.iter().any(|d| matches!(d, Draw::PerspectiveQuad { tex, .. } if *tex == neighbour)));
+    assert!(!out.iter().any(|d| matches!(d, Draw::Tex { tex, .. } if *tex == selected)));
+    assert_eq!(out.iter().filter(|d| matches!(d, Draw::Turned { tex, .. } if *tex == lid)).count(), 1);
+    let box_draw = |draws: &[Draw]| draws.iter().find_map(|d| match d {
+        Draw::PerspectiveQuad { tex, corners, alpha, .. } if *tex == box_tex => Some((corners[0][1], *alpha)),
+        _ => None,
+    }).unwrap();
+    let (y0, alpha0) = box_draw(&before);
+    let (y1, alpha1) = box_draw(&out);
+    assert!(y1 > y0 && alpha1 < alpha0);
+    app.apply(Action::GbaDown(Btn::B));
+    app.update(0.5);
+    assert!(app.core_picker().is_none());
+    let restored = frame(&app);
+    let (y2, alpha2) = box_draw(&restored);
+    assert!((y2 - y0).abs() < 0.001 && (alpha2 - alpha0).abs() < 0.001);
+    assert_eq!(restored.iter().filter(|d| matches!(d, Draw::Tex { tex, .. } if *tex == selected)).count(), 1);
+}
+
+#[test]
+fn studio_slide_retains_box_and_carousel_without_duplicate_cartridge() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    let mut app = setup(root.path());
+    open(&mut app);
+    app.apply(Action::SelectTap);
+    app.update(0.05);
+    let out = frame(&app);
+    assert!(out.iter().any(|d| matches!(d, Draw::PerspectiveQuad { tex, .. } if *tex == textures(1000).front)));
+    assert!(out.iter().any(|d| matches!(d, Draw::PerspectiveQuad { tex, .. } if *tex == textures(1003).side)));
+    assert!(!out.iter().any(|d| matches!(d, Draw::Tex { tex, .. } if *tex == TexId::from_raw(2000))));
+    assert_eq!(out.iter().filter(|d| matches!(d, Draw::Quad { tex, .. } if *tex == TexId::from_raw(2000))).count(), 1);
+}
+
+#[test]
+fn insert_and_eject_use_the_vanilla_cartridge_pose() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    let mut boxed = setup(root.path());
+    open(&mut boxed);
+    write_carousel_view(root.path(), CarouselView::Cartridges).unwrap();
+    let mut vanilla = common::boot(root.path());
+    for want in vanilla.face_wants() {
+        vanilla.set_cart_face(want.shelf, want.index, TexId::from_raw(2000 + want.index));
+    }
+    for app in [&mut boxed, &mut vanilla] {
+        app.apply(Action::GbaDown(Btn::A));
+        app.apply(Action::GbaUp(Btn::A));
+    }
+    for dt in [0.0, 0.1, 0.2, 0.3] {
+        boxed.update(dt);
+        vanilla.update(dt);
+        equal_pose(face(&boxed, TexId::from_raw(2000)).unwrap(), face(&vanilla, TexId::from_raw(2000)).unwrap());
+    }
+    for app in [&mut boxed, &mut vanilla] {
+        app.apply(Action::Eject);
+    }
+    for dt in [0.0, 0.2, 0.3] {
+        boxed.update(dt);
+        vanilla.update(dt);
+        equal_pose(face(&boxed, TexId::from_raw(2000)).unwrap(), face(&vanilla, TexId::from_raw(2000)).unwrap());
+    }
+}
+
+#[test]
+fn closing_a_backwards_box_flips_it_before_the_flap_opens() {
+    for close in [Action::GbaDown(Btn::B), Action::ShelfLeft, Action::ShelfRight] {
+        let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+        let mut app = setup(root.path());
+        open(&mut app);
+        app.apply(Action::GbaDown(Btn::Down));
+        app.update(1.0);
+        app.apply(Action::GbaDown(Btn::A));
+        app.update(1.0);
+        let back = face(&app, textures(1000).back).unwrap();
+        app.apply(close);
+        equal_pose(back, face(&app, textures(1000).back).unwrap());
+        app.update(0.16);
+        let out = frame(&app);
+        assert!(out.iter().any(|d| matches!(d, Draw::PerspectiveQuad { tex, .. } if *tex == textures(1000).side)));
+        assert!(!out.iter().any(|d| matches!(d, Draw::Part { tex, .. } if *tex == TexId::from_raw(4000))));
+        app.update(0.17);
+        assert!(face(&app, textures(1000).front).is_some());
+        app.update(0.25);
+        assert!(frame(&app).iter().any(|d| matches!(d, Draw::Part { tex, .. } if *tex == TexId::from_raw(4000))));
+    }
+}
+
 #[test]
 fn flap_unfolds_in_layers_and_folds_back_in_reverse() {
     let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);

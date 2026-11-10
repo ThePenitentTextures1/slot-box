@@ -28,7 +28,8 @@ With the box selected, <kbd>A</kbd> flips it, <kbd>R1</kbd> zooms in, and
 <kbd>B</kbd> to reset the zoom. At normal zoom, <kbd>B</kbd> or
 <kbd>Left</kbd>/<kbd>Right</kbd> closes the box. On the carousel,
 <kbd>SELECT</kbd> inspects the box; the same flip, zoom and pan controls apply,
-and <kbd>B</kbd> returns to the carousel.
+and <kbd>B</kbd> returns to the carousel. If the box is facing backward when
+closed, it flips to the front before the cartridge is put away.
 
 ## The shelves
 

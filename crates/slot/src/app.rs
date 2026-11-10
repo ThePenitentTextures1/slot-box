@@ -2419,6 +2419,15 @@ impl App {
 
     fn tick_box_scene(&mut self) {
         let now = self.now();
+        if let BoxScene::PreparingClose { started, angle } = self.box_scene {
+            let t = (now.saturating_sub(started) as f32 / BOX_FLIP_MS as f32).clamp(0.0, 1.0);
+            self.box_turn = angle * (1.0 - t * t * (3.0 - 2.0 * t));
+            if t >= 1.0 {
+                self.box_turn = 0.0;
+                self.box_scene = BoxScene::Closing { started: started + BOX_FLIP_MS };
+            }
+            return;
+        }
         if matches!(self.box_scene, BoxScene::QuickOpening { started } if now.saturating_sub(started) >= BOX_OPEN_MS) {
             self.box_scene = BoxScene::Open { item: BoxItem::Cartridge };
             self.insert(self.box_quick_clean);
@@ -2560,6 +2569,18 @@ impl App {
         };
     }
 
+    fn close_open_box(&mut self) {
+        self.box_buttons = [false; 6];
+        self.box_pending = None;
+        self.play_held = None;
+        self.box_back = false;
+        self.box_scene = if self.box_turn.abs() > 0.001 {
+            BoxScene::PreparingClose { started: self.now(), angle: self.box_turn }
+        } else {
+            BoxScene::Closing { started: self.now() }
+        };
+    }
+
     fn box_input(&mut self, action: Action) -> bool {
         if !self.on_shelf()
             || self.carousel_view != CarouselView::Boxes
@@ -2577,6 +2598,7 @@ impl App {
                 | BoxScene::FlippingFront { .. }
                 | BoxScene::Opening { .. }
                 | BoxScene::QuickOpening { .. }
+                | BoxScene::PreparingClose { .. }
                 | BoxScene::Closing { .. }
         ) {
             self.held_dir = None;
@@ -2680,16 +2702,15 @@ impl App {
                     true
                 }
                 Action::GbaDown(Btn::B) => {
-                    self.box_scene = BoxScene::Closing { started: self.now() };
-                    self.box_buttons = [false; 6];
+                    self.close_open_box();
                     true
                 }
                 Action::GbaDown(Btn::Left) | Action::ShelfLeft => {
-                    self.box_scene = BoxScene::Closing { started: self.now() };
+                    self.close_open_box();
                     true
                 }
                 Action::GbaDown(Btn::Right) | Action::ShelfRight => {
-                    self.box_scene = BoxScene::Closing { started: self.now() };
+                    self.close_open_box();
                     true
                 }
                 Action::GbaDown(Btn::Down) if item == BoxItem::Cartridge => {
@@ -5659,7 +5680,7 @@ impl App {
                 let t = (now.saturating_sub(started) as f32 / BOX_CLOSE_MS as f32).clamp(0.0, 1.0);
                 self.draw_open_box(1.0 - t, out);
             }
-            BoxScene::Open { .. } => self.draw_open_box(1.0, out),
+            BoxScene::Open { .. } | BoxScene::PreparingClose { .. } => self.draw_open_box(1.0, out),
             BoxScene::Carousel => return false,
         }
         true
@@ -5675,9 +5696,9 @@ impl App {
         let travel = smooth(p / 0.25);
         let extraction = smooth((p - 0.34) / 0.35);
         let move_to_center = smooth((p - 0.80) / 0.10)
-            * (1.0 - smooth((self.box_focus - 0.5) / 0.5));
+            * (1.0 - smooth((self.box_focus - 0.25) * 4.0));
         let pickup = smooth((p - 0.90) / 0.10)
-            * (1.0 - smooth(self.box_focus / 0.5));
+            * (1.0 - smooth(self.box_focus * 4.0));
         let flap = smooth((p - 0.20) / 0.14) * (1.0 - smooth((p - 0.68) / 0.14));
         let lid = smooth(flap * 2.0);
         let tab = smooth((flap - 0.5) * 2.0);
@@ -5685,7 +5706,7 @@ impl App {
         let (w, h) = (front_w * scale, front_h * scale);
         let selected_y = canvas.h / 2.0;
         let parked_y = canvas.h + h * 0.15;
-        let box_y = parked_y + (selected_y - parked_y) * self.box_focus;
+        let box_y = parked_y + (selected_y - parked_y) * smooth((self.box_focus - 0.5) * 2.0);
         let origin = if matches!(self.box_scene, BoxScene::Closing { .. }) {
             let (center, scale, angle) = self.shelf().selected_box_pose(canvas);
             boxview::BoxPose { center, scale, angle }
@@ -5769,6 +5790,22 @@ impl App {
         );
     }
 
+    fn draw_open_box_backdrop(&self, recede: f32, dim: f32, distance: f32, out: &mut Vec<Draw>) {
+        let Some((_, faces, (w, h, depth))) = self.selected_box() else {
+            return;
+        };
+        let canvas = self.canvas();
+        let scale = slot_ui::BOX_VIEW_SCALE;
+        slot_ui::draw_rotated_box(
+            faces,
+            (w * scale, h * scale, depth * scale),
+            self.box_turn,
+            [canvas.w / 2.0, canvas.h + h * scale * 0.15 + distance * recede],
+            (1.0 - recede) * dim,
+            out,
+        );
+    }
+
     pub fn draw(&self, out: &mut Vec<Draw>) {
         match self.server_frame() {
             Some((frame, tex)) => self.draw_server(&frame, &tex, out),
@@ -5809,15 +5846,6 @@ impl App {
             return self.hud.draw(self.canvas(), self.now(), out);
         }
         if self.studio.is_some() && !matches!(self.phase, Phase::Doze { .. }) {
-            if self.carousel_view == CarouselView::Boxes
-                && matches!(self.box_scene, BoxScene::Open { .. })
-                && self.selected_box().is_some()
-            {
-                // Paint the open-box scene as the studio backdrop before the
-                // studio ground panel slides in over it.
-                self.draw_background(out);
-                self.draw_open_box(1.0, out);
-            }
             self.draw_studio(out);
             return self.hud.draw(self.canvas(), self.now(), out);
         }
@@ -5894,31 +5922,14 @@ impl App {
                         let open_box = self.carousel_view == CarouselView::Boxes
                             && matches!(self.box_scene, BoxScene::Open { .. })
                             && self.selected_box().is_some();
+                        let open = ease(picker.openness(self.now()));
+                        let dim = 1.0 + (CORE_PICKER_DIM - 1.0) * open;
+                        let recede = CORE_PICKER_RECEDE * open;
+                        self.shelf().draw_row(self.canvas(), Some(stem), 0.0, recede, dim, out);
                         if open_box {
-                            // In Box View the shelf row is replaced by the open-box
-                            // scene as the picker backdrop.  Draw the background
-                            // before the picker closure captures `self` and `out`.
-                            self.draw_background(out);
-                            self.draw_open_box(1.0, out);
+                            self.draw_open_box_backdrop(recede, dim, 130.0, out);
                         }
-                        let mut draw_picker = || {
-                            let open = ease(picker.openness(self.now()));
-                            let dim = 1.0 + (CORE_PICKER_DIM - 1.0) * open;
-                            // In Box View we skip the shelf row — the open-box scene
-                            // is already painted above.
-                            if !open_box {
-                                self.shelf().draw_row(
-                                    self.canvas(),
-                                    Some(stem),
-                                    0.0,
-                                    CORE_PICKER_RECEDE * open,
-                                    dim,
-                                    out,
-                                );
-                            }
-                            draw_empty_slot(self.canvas(), self.slot_faces, out);
-                        };
-                        draw_picker();
+                        draw_empty_slot(self.canvas(), self.slot_faces, out);
                     }
                     _ => {
                         if self.box_scene != BoxScene::Carousel && self.selected_box().is_some() {
@@ -5955,8 +5966,19 @@ impl App {
                     footer_ink(self.light()),
                     out,
                 );
-                if self.core_picker_shown().is_none() {
-                    if let BoxScene::Open { item } = self.box_scene {
+                if self.wifi_up() {
+                    slot_ui::draw_wifi_icon(self.battery_percent, self.wifi_face(), out);
+                }
+                if matches!(self.box_scene, BoxScene::Open { .. } | BoxScene::PreparingClose { .. }) {
+                    if self.plugged_face.is_some() {
+                        slot_ui::draw_plugged_slot(self.canvas(), self.plugged_face, 1.0, out);
+                    } else {
+                        out.push(Draw::Rect {
+                            x: 0.0, y: LINK_LEGEND_Y, w: self.canvas().w, h: MOUTH_H,
+                            colour: slot_ui::housing(),
+                        });
+                    }
+                    if let (BoxScene::Open { item }, None) = (self.box_scene, self.core_picker_shown()) {
                         let legends = &self.open_box_legends[usize::from(self.light())];
                         if legends.len() == 5 {
                             let back = if item == BoxItem::Box && self.box_zoom > 1.001 { legends[4] } else { legends[0] };
@@ -5964,9 +5986,6 @@ impl App {
                             self.draw_spread_legends(&[back, legends[1], action], LINK_LEGEND_Y, 1.0, out);
                         }
                     }
-                }
-                if self.wifi_up() {
-                    slot_ui::draw_wifi_icon(self.battery_percent, self.wifi_face(), out);
                 }
                 if let Some(picker) = self.core_picker_shown() {
                     let lift = lift_of(picker.openness(self.now()));
@@ -5995,43 +6014,14 @@ impl App {
                 self.chrome(cart, 0.0, out);
             }
             Phase::Inserting { cart, resumed, .. } => {
-                if self.carousel_view == CarouselView::Boxes
-                    && self.box_scene != BoxScene::Carousel
-                    && !resumed
-                {
+                if !resumed {
                     self.draw_background(out);
-                    if let Some((selected, mut faces, (w, h, _))) = self.selected_box() {
-                        if self.box_back { faces.front = faces.back; }
-                        let canvas = self.canvas();
-                        let (cw, ch) = slot_ui::cart_box(selected.platform);
-                        let (cw, ch) = (cw as f32, ch as f32);
-                        let (sw, sh) = slot_ui::seated_box(selected.platform);
-                        let seated = (sw as f32, sh as f32);
-                        let start = boxview::open_box_cart_rect(canvas, cw, ch);
-                        let index = self.shelf().index;
-                        self.shelf().draw_row(canvas, Some(cart), 0.0, self.seat(), 1.0, out);
-                        slot_ui::draw_slot_back(canvas, self.slot_faces, 1.0, out);
-                        boxview::insert(
-                            canvas, faces,
-                            (w * slot_ui::BOX_VIEW_SCALE, h * slot_ui::BOX_VIEW_SCALE),
-                            start, (cw, ch), seated, self.seat(), out,
-                            |rect, out| self.shelf().draw_cart_at(index, rect, out),
-                        );
-                        slot_ui::draw_slot_front(canvas, self.slot_faces, 1.0, out);
-                        draw_footer(canvas, self.battery, self.battery_percent, self.bolt,
-                            self.shelf_clock, footer_ink(self.light()), out);
-                        if self.wifi_up() { slot_ui::draw_wifi_icon(self.battery_percent, self.wifi_face(), out); }
-                    } else {
-                        self.shelf().draw_row(self.canvas(), Some(cart), 0.0, self.seat(), 1.0, out);
-                        self.chrome(cart, 0.0, out);
+                    self.shelf().draw_row(self.canvas(), Some(cart), 0.0, self.seat(), 1.0, out);
+                    if self.carousel_view == CarouselView::Boxes && self.box_scene != BoxScene::Carousel {
+                        self.draw_open_box_backdrop(self.seat(), 1.0, self.canvas().h, out);
                     }
-                } else {
-                    if !resumed {
-                        self.draw_background(out);
-                        self.shelf().draw_row(self.canvas(), Some(cart), 0.0, self.seat(), 1.0, out);
-                    }
-                    self.chrome(cart, 0.0, out);
                 }
+                self.chrome(cart, 0.0, out);
             }
             Phase::Ejecting { .. }
                 if self.framed_panel() && (self.shows_game() || self.screen > 0.0) =>
@@ -6042,38 +6032,12 @@ impl App {
                 self.draw_powering(out)
             }
             Phase::Ejecting { cart, .. } => {
+                self.draw_background(out);
+                self.shelf().draw_row(self.canvas(), Some(cart), 0.0, self.seat(), 1.0, out);
                 if self.carousel_view == CarouselView::Boxes && self.box_scene != BoxScene::Carousel {
-                    self.draw_background(out);
-                    if let Some((selected, mut faces, (w, h, _))) = self.selected_box() {
-                        if self.box_back { faces.front = faces.back; }
-                        let canvas = self.canvas();
-                        let (cw, ch) = slot_ui::cart_box(selected.platform);
-                        let (cw, ch) = (cw as f32, ch as f32);
-                        let (sw, sh) = slot_ui::seated_box(selected.platform);
-                        let seated = (sw as f32, sh as f32);
-                        let start = boxview::open_box_cart_rect(canvas, cw, ch);
-                        let index = self.shelf().index;
-                        self.shelf().draw_row(canvas, Some(cart), 0.0, self.seat(), 1.0, out);
-                        slot_ui::draw_slot_back(canvas, self.slot_faces, 1.0, out);
-                        boxview::eject(
-                            canvas, faces,
-                            (w * slot_ui::BOX_VIEW_SCALE, h * slot_ui::BOX_VIEW_SCALE),
-                            start, (cw, ch), seated, self.seat(), out,
-                            |rect, out| self.shelf().draw_cart_at(index, rect, out),
-                        );
-                        slot_ui::draw_slot_front(canvas, self.slot_faces, 1.0, out);
-                        draw_footer(canvas, self.battery, self.battery_percent, self.bolt,
-                            self.shelf_clock, footer_ink(self.light()), out);
-                        if self.wifi_up() { slot_ui::draw_wifi_icon(self.battery_percent, self.wifi_face(), out); }
-                    } else {
-                        self.shelf().draw_row(self.canvas(), Some(cart), 0.0, self.seat(), 1.0, out);
-                        self.chrome(cart, 0.0, out);
-                    }
-                } else {
-                    self.draw_background(out);
-                    self.shelf().draw_row(self.canvas(), Some(cart), 0.0, self.seat(), 1.0, out);
-                    self.chrome(cart, 0.0, out);
+                    self.draw_open_box_backdrop(self.seat(), 1.0, self.canvas().h, out);
                 }
+                self.chrome(cart, 0.0, out);
             }
             Phase::Playing { cart } if self.screen < 1.0 => {
                 self.draw_background(out);
@@ -7737,6 +7701,11 @@ impl App {
             let e = if self.studio_closing.is_some() { 1.0 - ease(t) } else { ease(t) };
             self.draw_background(out);
             self.shelf().draw_row(canvas, Some(&studio.cart.stem), 0.0, 0.0, 1.0, out);
+            if self.carousel_view == CarouselView::Boxes
+                && matches!(self.box_scene, BoxScene::Open { .. })
+            {
+                self.draw_open_box_backdrop(0.0, 1.0, 0.0, out);
+            }
             self.draw_studio_ground((e - 1.0) * OUT_H as f32, out);
             self.draw_studio_cart(out);
             return draw_empty_slot(canvas, self.slot_faces, out);
