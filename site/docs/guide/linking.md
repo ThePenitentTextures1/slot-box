@@ -36,11 +36,11 @@ Both devices need the same BIOS setup. If one has a `gba_bios.bin` and the other
 
 gpSP does the GBA link cable for Pokémon and both Advance Wars, and the wireless adapter for FireRed, LeafGreen and Emerald.
 
-Trading Pokémon? Put the game on gpSP first with <kbd>START</kbd> on the shelf, on both devices.
+Trading Pokémon? Put the game on gpSP first with <kbd>START</kbd> on the selected cartridge, on both devices. In Box View, open the box first.
 
 Pokémon FireRed, LeafGreen and Emerald can switch between cable and wireless with <kbd>SELECT</kbd> on the link screen.
 
-If slot says "Please switch to gpSP", the game needs the wireless adapter. Change the emulator with <kbd>START</kbd> on the shelf. See [Playing Games](playing.md).
+If slot says "Please switch to gpSP", the game needs the wireless adapter. Change the emulator with <kbd>START</kbd> on the selected cartridge. See [Playing Games](playing.md).
 
 ## While you're linked
 

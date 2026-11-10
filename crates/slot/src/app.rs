@@ -118,8 +118,9 @@ const SLOT_NAME_OUT_MS: Millis = 800;
 const SLOT_NAME_ALPHA: f32 = 1.0;
 const CORE_PICKER_DIM: f32 = 0.25 / (1.0 - CORE_PICKER_RECEDE);
 const BOX_FLIP_MS: Millis = 320;
-const BOX_OPEN_MS: Millis = 1200;
-const BOX_CLOSE_MS: Millis = 1200;
+const BOX_BAR_FADE_MS: Millis = 160;
+const BOX_OPEN_MS: Millis = 1800;
+const BOX_CLOSE_MS: Millis = 1800;
 const BACK_ZOOM_MAX: f32 = 4.0;
 const LINK_TEXT_Y: f32 = 44.0;
 const LINK_LEGEND_Y: f32 = OUT_H as f32 - MOUTH_H;
@@ -2428,7 +2429,7 @@ impl App {
             }
             return;
         }
-        if matches!(self.box_scene, BoxScene::QuickOpening { started } if now.saturating_sub(started) >= BOX_OPEN_MS) {
+        if matches!(self.box_scene, BoxScene::QuickOpening { started } if now.saturating_sub(started) >= BOX_BAR_FADE_MS + BOX_OPEN_MS) {
             self.box_scene = BoxScene::Open { item: BoxItem::Cartridge };
             self.insert(self.box_quick_clean);
             return;
@@ -2453,7 +2454,7 @@ impl App {
                 BoxScene::Carousel
             }
             BoxScene::Opening { started, .. }
-                if now.saturating_sub(started) >= BOX_OPEN_MS =>
+                if now.saturating_sub(started) >= BOX_BAR_FADE_MS + BOX_OPEN_MS =>
             {
                 BoxScene::Open {
                     item: BoxItem::Cartridge,
@@ -2498,7 +2499,7 @@ impl App {
         };
         if !inspecting {
             let target = if item == BoxItem::Box { 1.0 } else { 0.0 };
-            let blend = 1.0 - (-12.0 * dt.max(0.0)).exp();
+            let blend = 1.0 - (-8.0 * dt.max(0.0)).exp();
             self.box_focus += (target - self.box_focus) * blend;
             if (self.box_focus - target).abs() < 0.001 {
                 self.box_focus = target;
@@ -2545,8 +2546,9 @@ impl App {
         if let Some((_, _, (w, h, _))) = self.selected_box() {
             let max_x = ((w * slot_ui::BOX_VIEW_SCALE * zoom - canvas.w) / 2.0).max(0.0);
             let max_y = ((h * slot_ui::BOX_VIEW_SCALE * zoom - canvas.h) / 2.0).max(0.0);
+            let min_y = (LINK_LEGEND_Y - 4.0 - (canvas.h + h * slot_ui::BOX_VIEW_SCALE * zoom) / 2.0).min(0.0);
             pan[0] = pan[0].clamp(-max_x, max_x);
-            pan[1] = pan[1].clamp(-max_y, max_y);
+            pan[1] = pan[1].clamp(min_y, max_y);
         }
         if inspecting {
             self.box_scene = BoxScene::Back { zoom, pan };
@@ -2612,6 +2614,9 @@ impl App {
                 match action {
                     Action::GbaDown(Btn::L2) | Action::SelectTap => {
                         let (center, scale, angle) = self.shelf().selected_box_pose(self.canvas());
+                        self.play_held = None;
+                        self.held_dir = None;
+                        self.shelf_mut().release_hold();
                         self.box_scene = BoxScene::FlippingBack {
                             started: self.now(),
                             from: boxview::BoxPose { center, scale, angle },
@@ -2641,6 +2646,7 @@ impl App {
                 }
             }
             BoxScene::Back { zoom, pan } => match action {
+                Action::Favorite | Action::ForgetRecent => true,
                 Action::ShelfLeft | Action::ShelfRight | Action::GbaDown(Btn::Left | Btn::Right)
                     if zoom <= 1.001 => {
                     self.return_from_box_inspection(zoom, pan);
@@ -2676,9 +2682,10 @@ impl App {
                     self.return_from_box_inspection(zoom, pan);
                     true
                 }
-                _ => false,
+                _ => true,
             },
             BoxScene::Open { item } => match action {
+                Action::Favorite | Action::ForgetRecent => true,
                 Action::PreviousShelf | Action::NextShelf => true,
                 Action::ShelfLeft | Action::ShelfRight if item == BoxItem::Box && self.box_zoom > 1.001 => true,
                 Action::GbaDown(Btn::R1) if item == BoxItem::Box => { self.box_buttons[0] = true; true }
@@ -5668,12 +5675,8 @@ impl App {
                     out,
                 );
             }
-            BoxScene::Opening { started } => {
-                let t = (now.saturating_sub(started) as f32 / BOX_OPEN_MS as f32).clamp(0.0, 1.0);
-                self.draw_open_box(t, out);
-            }
-            BoxScene::QuickOpening { started } => {
-                let t = (now.saturating_sub(started) as f32 / BOX_OPEN_MS as f32).clamp(0.0, 1.0);
+            BoxScene::Opening { started } | BoxScene::QuickOpening { started } => {
+                let t = (now.saturating_sub(started + BOX_BAR_FADE_MS) as f32 / BOX_OPEN_MS as f32).clamp(0.0, 1.0);
                 self.draw_open_box(t, out);
             }
             BoxScene::Closing { started } => {
@@ -5693,14 +5696,14 @@ impl App {
         let canvas = self.canvas();
         let p = progress.clamp(0.0, 1.0);
         let smooth = |t: f32| { let t = t.clamp(0.0, 1.0); t * t * (3.0 - 2.0 * t) };
-        let travel = smooth(p / 0.25);
-        let extraction = smooth((p - 0.34) / 0.35);
-        let move_to_center = smooth((p - 0.80) / 0.10)
+        let travel = smooth(p / 0.20);
+        let extraction = smooth((p - 0.36) / 0.30);
+        let move_to_center = smooth((p - 0.78) / 0.12)
             * (1.0 - smooth((self.box_focus - 0.25) * 4.0));
         let pickup = smooth((p - 0.90) / 0.10)
             * (1.0 - smooth(self.box_focus * 4.0));
-        let flap = smooth((p - 0.20) / 0.14) * (1.0 - smooth((p - 0.68) / 0.14));
-        let lid = smooth(flap * 2.0);
+        let flap = smooth((p - 0.16) / 0.24) * (1.0 - smooth((p - 0.67) / 0.21));
+        let lid = (std::f32::consts::FRAC_PI_2 * smooth(flap * 2.0)).sin();
         let tab = smooth((flap - 0.5) * 2.0);
         let scale = slot_ui::BOX_VIEW_SCALE;
         let (w, h) = (front_w * scale, front_h * scale);
@@ -5747,6 +5750,19 @@ impl App {
                 });
             }
         }
+        let draw_box = |out: &mut Vec<Draw>| {
+            slot_ui::draw_rotated_box(
+                faces,
+                (front_w * face_scale, front_h * face_scale, depth * face_scale),
+                angle,
+                center,
+                1.0,
+                out,
+            );
+        };
+        if p >= 0.90 {
+            draw_box(out);
+        }
         if extraction > 0.0 {
             let (small_w, small_h) = slot_ui::loose_cart_dimensions(cart);
             let (small_w, small_h) = (small_w * scale, small_h * scale);
@@ -5780,14 +5796,9 @@ impl App {
                 });
             }
         }
-        slot_ui::draw_rotated_box(
-            faces,
-            (front_w * face_scale, front_h * face_scale, depth * face_scale),
-            angle,
-            center,
-            1.0,
-            out,
-        );
+        if p < 0.90 {
+            draw_box(out);
+        }
     }
 
     fn draw_open_box_backdrop(&self, recede: f32, dim: f32, distance: f32, out: &mut Vec<Draw>) {
@@ -5969,21 +5980,47 @@ impl App {
                 if self.wifi_up() {
                     slot_ui::draw_wifi_icon(self.battery_percent, self.wifi_face(), out);
                 }
-                if matches!(self.box_scene, BoxScene::Open { .. } | BoxScene::PreparingClose { .. }) {
+                let bar_alpha = match self.box_scene {
+                    BoxScene::Opening { started } | BoxScene::QuickOpening { started } =>
+                        (self.now().saturating_sub(started) as f32 / BOX_BAR_FADE_MS as f32).clamp(0.0, 1.0),
+                    BoxScene::FlippingBack { started, .. } =>
+                        (self.now().saturating_sub(started) as f32 / BOX_BAR_FADE_MS as f32).clamp(0.0, 1.0),
+                    BoxScene::FlippingFront { started, .. } =>
+                        (1.0 - self.now().saturating_sub(started) as f32 / BOX_FLIP_MS as f32).clamp(0.0, 1.0),
+                    BoxScene::Closing { started } =>
+                        ((BOX_CLOSE_MS as f32 - self.now().saturating_sub(started) as f32) / BOX_BAR_FADE_MS as f32).clamp(0.0, 1.0),
+                    BoxScene::Open { .. } | BoxScene::Back { .. } | BoxScene::PreparingClose { .. } => 1.0,
+                    BoxScene::Carousel => 0.0,
+                };
+                if bar_alpha > 0.0 {
                     if self.plugged_face.is_some() {
-                        slot_ui::draw_plugged_slot(self.canvas(), self.plugged_face, 1.0, out);
+                        slot_ui::draw_plugged_slot(self.canvas(), self.plugged_face, bar_alpha, out);
                     } else {
+                        let mut colour = slot_ui::housing();
+                        colour[3] *= bar_alpha;
                         out.push(Draw::Rect {
                             x: 0.0, y: LINK_LEGEND_Y, w: self.canvas().w, h: MOUTH_H,
-                            colour: slot_ui::housing(),
+                            colour,
                         });
                     }
-                    if let (BoxScene::Open { item }, None) = (self.box_scene, self.core_picker_shown()) {
+                    if self.core_picker_shown().is_none() {
                         let legends = &self.open_box_legends[usize::from(self.light())];
                         if legends.len() == 5 {
-                            let back = if item == BoxItem::Box && self.box_zoom > 1.001 { legends[4] } else { legends[0] };
-                            let action = if item == BoxItem::Box { legends[3] } else { legends[2] };
-                            self.draw_spread_legends(&[back, legends[1], action], LINK_LEGEND_Y, 1.0, out);
+                            match self.box_scene {
+                                BoxScene::Opening { .. } | BoxScene::Open { item: BoxItem::Cartridge } =>
+                                    self.draw_spread_legends(&[legends[0], legends[1], legends[2]], LINK_LEGEND_Y, bar_alpha, out),
+                                BoxScene::Open { item: BoxItem::Box } => {
+                                    let back = if self.box_zoom > 1.001 { legends[4] } else { legends[0] };
+                                    self.draw_spread_legends(&[back, legends[1], legends[3]], LINK_LEGEND_Y, bar_alpha, out);
+                                }
+                                BoxScene::Back { zoom, .. } => {
+                                    let back = if zoom > 1.001 { legends[4] } else { legends[0] };
+                                    self.draw_spread_legends(&[back, legends[3]], LINK_LEGEND_Y, bar_alpha, out);
+                                }
+                                BoxScene::FlippingBack { .. } | BoxScene::FlippingFront { .. } =>
+                                    self.draw_spread_legends(&[legends[0], legends[3]], LINK_LEGEND_Y, bar_alpha, out),
+                                _ => {}
+                            }
                         }
                     }
                 }

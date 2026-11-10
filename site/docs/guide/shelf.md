@@ -1,27 +1,60 @@
 # The Shelf
 
-## Getting around
+## Cartridge View controls
+
+These are the default shelf controls. The collection controls also apply to
+games on the Box View carousel. The four shelf bindings can be changed in
+Settings → Controls → Shelf.
+
+### Game as a collection item
 
 | Button | Does |
 | --- | --- |
 | <kbd>Left</kbd> / <kbd>Right</kbd> | Move along the shelf |
 | <kbd>Up</kbd> / <kbd>Down</kbd> | Jump to the previous or next letter |
 | <kbd>L1</kbd> / <kbd>R1</kbd> | Switch shelves |
-| <kbd>Y</kbd> | Favorite / unfavorite the cart you're on |
-| <kbd>X</kbd> | Take the cart you're on off Recents |
-| <kbd>A</kbd> | Insert the cart |
-| <kbd>Hold A</kbd> | Insert the cart and don't auto load the save state |
-| <kbd>START</kbd> | Choose the emulator (GBA only) |
+| <kbd>Y</kbd> | Favorite / unfavorite the selected game |
+| <kbd>X</kbd> | Remove the selected game from Recents, when on the Recents shelf |
+
+### Game as a playable cartridge
+
+| Button | Does |
+| --- | --- |
+| Tap <kbd>A</kbd> | Insert the cartridge, using the auto-load setting |
+| Hold <kbd>A</kbd> | Insert the cartridge without auto-loading a save state |
+| <kbd>START</kbd> | Choose the emulator |
+| <kbd>SELECT</kbd> | Open Cartridge Studio |
+
+These cartridge actions apply to a selected cartridge in Cartridge View or
+Open Box View. <kbd>B</kbd> has no action on the Cartridge View carousel.
+
+### Slot controls
+
+| Button | Does |
+| --- | --- |
 | <kbd>MENU</kbd> | Open settings |
+
+Volume, display, power, and other system shortcuts are separate from the
+selected game; see [Controls](controls.md).
 
 ## Box View
 
-When Box View is enabled and a game has box art, tap <kbd>A</kbd> to open its box.
-The cartridge is selected first. Press <kbd>Down</kbd> to select the box and
-<kbd>Up</kbd> to return to the cartridge. With the cartridge selected, <kbd>A</kbd>
-plays, <kbd>START</kbd> chooses an emulator, and <kbd>SELECT</kbd> opens Cartridge
-Studio. Hold <kbd>A</kbd> or press <kbd>START</kbd> on the carousel to play directly.
-Games without box art retain the regular cartridge controls.
+When Box View is enabled and a game has box art, the carousel has these
+box-specific controls in addition to the collection controls:
+
+| Button | Does |
+| --- | --- |
+| Tap <kbd>A</kbd> | Open the box and its contents |
+| Hold <kbd>A</kbd> | Skip Open Box View and start fresh |
+| <kbd>START</kbd> | Skip Open Box View and play using the auto-load setting |
+| <kbd>SELECT</kbd> | Inspect the box |
+| <kbd>B</kbd> | No action on the carousel; returns to it from Open Box View |
+
+The cartridge is selected first in Open Box View. Press <kbd>Down</kbd> to select the box and
+<kbd>Up</kbd> to return to the cartridge. With the cartridge selected, the
+cartridge controls above apply. Open the box to change the emulator or use
+Cartridge Studio. Games without box art retain the regular cartridge controls
+directly on the carousel.
 
 With the box selected, <kbd>A</kbd> flips it, <kbd>R1</kbd> zooms in, and
 <kbd>L1</kbd> zooms out. While zoomed, hold a direction to pan and press

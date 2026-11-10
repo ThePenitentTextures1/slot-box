@@ -66,10 +66,10 @@ For other chords, the first button goes to the game straight away and the second
 :   Switch between platforms
 
 Tap <kbd>A</kbd>
-:   Resume the last save state
+:   Insert the selected cartridge, using the auto-load setting; open a selected box in Box View
 
 Hold <kbd>A</kbd>
-:   Start the game fresh
+:   Start fresh without auto-loading a save state, including for a selected box
 
 <kbd>Y</kbd>
 :   Favorite / Unfavorite selected game
@@ -81,8 +81,14 @@ Hold <kbd>A</kbd>
 :   Open the settings menu
 
 <kbd>START</kbd>
-:   Choose which emulator runs the cart (GBA only)
+:   Choose which emulator runs the selected cartridge; play a selected box using the auto-load setting
 
+<kbd>SELECT</kbd>
+:   Open Cartridge Studio for a selected cartridge, or inspect a selected box
+
+Open a boxed game to choose its emulator or use Cartridge Studio. See
+[The Shelf](shelf.md#cartridge-view-controls) for the collection/cartridge
+control split and Open Box controls.
 </div>
 
 ### In Game

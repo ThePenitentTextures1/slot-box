@@ -730,6 +730,19 @@ impl Shelf {
                         alpha * dim,
                         out,
                     );
+                    if let (Some(true), Some((tex, sw, sh))) = (self.hearted.get(i), self.heart) {
+                        let opacity = alpha * dim * (1.0 - t);
+                        if opacity > 0.0 {
+                            out.push(Draw::Tex {
+                                x: (x + w - sw - HEART_INSET).round(),
+                                y: (y + HEART_INSET).round(),
+                                w: sw,
+                                h: sh,
+                                tex,
+                                alpha: opacity,
+                            });
+                        }
+                    }
                     continue;
                 }
             }
