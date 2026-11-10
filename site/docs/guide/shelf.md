@@ -14,6 +14,22 @@
 | <kbd>START</kbd> | Choose the emulator (GBA only) |
 | <kbd>MENU</kbd> | Open settings |
 
+## Box View
+
+When Box View is enabled and a game has box art, tap <kbd>A</kbd> to open its box.
+The cartridge is selected first. Press <kbd>Down</kbd> to select the box and
+<kbd>Up</kbd> to return to the cartridge. With the cartridge selected, <kbd>A</kbd>
+plays, <kbd>START</kbd> chooses an emulator, and <kbd>SELECT</kbd> opens Cartridge
+Studio. Hold <kbd>A</kbd> or press <kbd>START</kbd> on the carousel to play directly.
+Games without box art retain the regular cartridge controls.
+
+With the box selected, <kbd>A</kbd> flips it, <kbd>R1</kbd> zooms in, and
+<kbd>L1</kbd> zooms out. While zoomed, hold a direction to pan and press
+<kbd>B</kbd> to reset the zoom. At normal zoom, <kbd>B</kbd> or
+<kbd>Left</kbd>/<kbd>Right</kbd> closes the box. On the carousel,
+<kbd>SELECT</kbd> inspects the box; the same flip, zoom and pan controls apply,
+and <kbd>B</kbd> returns to the carousel.
+
 ## The shelves
 
 There's one shelf per system, along with two special shelves, in this order:

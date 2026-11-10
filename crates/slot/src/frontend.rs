@@ -629,6 +629,22 @@ impl Frontend {
         self.session.app_mut().set_alert_face(alert);
         let legend = legend_faces(compositor, &LEGEND);
         self.session.app_mut().set_legend_faces(legend);
+        let open_box_legends = [false, true].map(|light| {
+            [
+                (slot_ui::StudioGlyph::B, "Close", true),
+                (slot_ui::StudioGlyph::UpDown, "Select", true),
+                (slot_ui::StudioGlyph::A, "Play", false),
+                (slot_ui::StudioGlyph::A, "Flip", false),
+                (slot_ui::StudioGlyph::B, "Reset zoom", true),
+            ]
+            .into_iter()
+            .map(|(glyph, word, left)| {
+                let face = slot_ui::studio_legend(glyph, word, footer_ink(light), left);
+                (compositor.create_texture(face.w, face.h, &face.rgba), face.w)
+            })
+            .collect()
+        });
+        self.session.app_mut().set_open_box_legends(open_box_legends);
         let shot_hints = slot_ui::SHOT_HINTS
             .iter()
             .map(|&(key, label)| {

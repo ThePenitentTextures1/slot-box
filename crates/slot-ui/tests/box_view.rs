@@ -10,6 +10,7 @@ fn textures(id: usize) -> BoxFaceTextures {
         front: TexId::from_raw(id),
         side: TexId::from_raw(id + 1),
         back: TexId::from_raw(id + 2),
+        flap: None,
         front_size: (100, 100),
         side_size: (20, 100),
         back_size: (100, 100),

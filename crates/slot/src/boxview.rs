@@ -13,7 +13,8 @@ pub struct BoxPose {
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Scene {
     Carousel, FlippingBack { started: Millis, from: BoxPose }, Back { zoom:f32, pan:[f32;2] },
-    FlippingFront { started:Millis, from: BoxPose }, Opening { started:Millis, from_back:bool },
+    FlippingFront { started:Millis, from: BoxPose }, Opening { started:Millis },
+    QuickOpening { started:Millis },
     Open { item:Item }, Closing { started:Millis },
 }
 pub type BoxItem=Item;
@@ -42,9 +43,9 @@ fn pose(canvas:Canvas,from:[f32;4],native:(f32,f32),seated:(f32,f32),seat:f32)->
     [x,y,w,h]
 }
 fn draw_box(canvas:Canvas,faces:BoxFaceTextures,size:(f32,f32),p:f32,insert:bool,out:&mut Vec<Draw>) {
-    let t=ease(p);let shift=canvas.w*0.72*t*if insert {-1.0}else{1.0};
-    let alpha=if insert {1.0-0.25*t}else{0.75+0.25*t};
-    out.push(Draw::Tex{x:canvas.w*0.20-size.0/2.0+shift,y:(canvas.h-size.1)/2.0,w:size.0,h:size.1,tex:faces.back,alpha});
+    let t=ease(p);
+    let shift=canvas.h*if insert {t}else{1.0-t};
+    out.push(Draw::Tex{x:(canvas.w-size.0)/2.0,y:canvas.h-size.1*0.35+shift,w:size.0,h:size.1,tex:faces.front,alpha:1.0});
 }
 fn transition(canvas:Canvas,faces:BoxFaceTextures,box_size:(f32,f32),from:[f32;4],native:(f32,f32),seated:(f32,f32),seat:f32,insert:bool,out:&mut Vec<Draw>,draw:impl FnOnce([f32;4],&mut Vec<Draw>)) {
     let rect=pose(canvas,from,native,seated,seat);
@@ -84,6 +85,6 @@ pub fn cartridge_studio(draw_background: impl FnOnce(), draw_studio: impl FnOnce
 /// slide-in animation departs from the correct on-screen position.
 pub fn open_box_cart_rect(canvas: Canvas, cw: f32, ch: f32) -> [f32; 4] {
     let x = canvas.w / 2.0 - cw / 2.0;
-    let y = (canvas.h - ch) / 2.0;
+    let y = slot_ui::rest_y(ch);
     [x, y, cw, ch]
 }

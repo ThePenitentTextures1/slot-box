@@ -43,7 +43,7 @@ pub fn box_view_dimensions(cart: &Cart, japanese: bool) -> (f32, f32, f32) {
     )
 }
 
-fn loose_cart_dimensions(cart: &Cart) -> (f32, f32) {
+pub fn loose_cart_dimensions(cart: &Cart) -> (f32, f32) {
     let (width_mm, height_mm) = match cart.platform {
         Platform::Gba | Platform::Gbav => (60.0, 35.0),
         Platform::Gb | Platform::Gbc => (57.0, 65.5),
@@ -82,6 +82,7 @@ pub struct BoxFaceTextures {
     pub front: TexId,
     pub side: TexId,
     pub back: TexId,
+    pub flap: Option<TexId>,
     pub front_size: (u32, u32),
     pub side_size: (u32, u32),
     pub back_size: (u32, u32),
@@ -156,7 +157,9 @@ impl Shelf {
             .drain(..)
             .chain(self.interiors.drain(..))
             .flatten()
-            .chain(self.box_faces.drain(..).flatten().flat_map(|b| [b.front, b.side, b.back]))
+            .chain(self.box_faces.drain(..).flatten().flat_map(|b| {
+                [Some(b.front), Some(b.side), Some(b.back), b.flap].into_iter().flatten()
+            }))
             .collect();
         self.faces = vec![None; carts.len()];
         self.box_faces = vec![None; carts.len()];

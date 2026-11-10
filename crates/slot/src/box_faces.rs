@@ -65,6 +65,7 @@ struct BoxFaceArt {
     front: CartFace,
     side: CartFace,
     back: CartFace,
+    flap: CartFace,
     pivot: [f32; 2],
     front_center: [f32; 2],
     japanese: bool,
@@ -157,10 +158,12 @@ impl BoxFaces {
             let front = self.texture(compositor, &art.front);
             let side = self.texture(compositor, &art.side);
             let back = self.texture(compositor, &art.back);
+            let flap = self.texture(compositor, &art.flap);
             BoxFaceTextures {
                 front,
                 side,
                 back,
+                flap: Some(flap),
                 front_size: (art.front.w, art.front.h),
                 side_size: (art.side.w, art.side.h),
                 back_size: (art.back.w, art.back.h),
@@ -171,6 +174,7 @@ impl BoxFaces {
         });
         if let Some(old) = app.set_box_faces(key.0, key.1, faces) {
             self.free.extend([old.front, old.side, old.back]);
+            self.free.extend(old.flap);
         }
     }
 }
@@ -278,10 +282,12 @@ fn assemble(
     let scale = fh as f32;
     let pivot_x = bw as f32 * scale / bh as f32 + sw as f32 * scale / sh as f32;
     let front_width = fw as f32 * scale / fh as f32;
+    let flap = flap_face(&side, sw, sh)?;
     Some(BoxFaceArt {
         front: CartFace { rgba: front, w: fw, h: fh },
         side: CartFace { rgba: side, w: sw, h: sh },
         back: CartFace { rgba: back, w: bw, h: bh },
+        flap,
         pivot: [pivot_x, fh as f32 / 2.0],
         front_center: [pivot_x + front_width / 2.0, fh as f32 / 2.0],
         japanese: false,
@@ -301,14 +307,48 @@ fn load_texture_atlas(path: &Path) -> Option<BoxFaceArt> {
     let side = crop(&rgba, w, h, face_w, side_w)?;
     let front_x = face_w.checked_add(side_w)?;
     let front = crop(&rgba, w, h, front_x, face_w)?;
+    let flap = flap_face(&side, side_w, h)?;
     Some(BoxFaceArt {
         front: CartFace { rgba: front, w: face_w, h },
         side: CartFace { rgba: side, w: side_w, h },
         back: CartFace { rgba: back, w: face_w, h },
+        flap,
         pivot: [(face_w + side_w) as f32, h as f32 / 2.0],
         front_center: [(face_w + side_w) as f32 + face_w as f32 / 2.0, h as f32 / 2.0],
         japanese: false,
     })
+}
+
+fn flap_face(side: &[u8], width: u32, height: u32) -> Option<CartFace> {
+    let offset = (height as usize / 2).checked_mul(width as usize)?.checked_mul(4)?;
+    let colour = side.get(offset..offset + 3)?;
+    let (mut rgba, w, h) = slot_ui::decode_png_bytes(include_bytes!("../assets/box_flap.png"))
+        .or_else(|| {
+            eprintln!("slot: box flap: could not decode embedded artwork");
+            None
+        })?;
+    for pixel in rgba.chunks_exact_mut(4) {
+        if pixel[1] > 200 && pixel[0] < 40 && pixel[2] < 40 {
+            pixel[..3].copy_from_slice(colour);
+        }
+
+    }
+    Some(CartFace { rgba, w, h })
+}
+
+#[cfg(test)]
+mod flap_tests {
+    use super::*;
+
+    #[test]
+    fn flap_uses_the_left_middle_side_pixel_and_keeps_cardboard_white() {
+        let mut side = vec![0; 2 * 3 * 4];
+        side[8..12].copy_from_slice(&[42, 87, 136, 255]);
+        let flap = flap_face(&side, 2, 3).unwrap();
+        let pixel = |x: usize, y: usize| &flap.rgba[(y * flap.w as usize + x) * 4..][..4];
+        assert_eq!(pixel(350, 10), &[42, 87, 136, 255]);
+        assert_eq!(pixel(350, 150), &[255, 255, 255, 255]);
+    }
 }
 
 fn crop(src: &[u8], sw: u32, sh: u32, x: u32, width: u32) -> Option<Vec<u8>> {
