@@ -576,6 +576,7 @@ pub struct App {
     carousel_view: CarouselView,
     box_scene: BoxScene,
     box_open_from: boxview::BoxPose,
+    manual_cover: Option<(Cart, TexId)>,
     box_focus: f32,
     box_zoom: f32,
     box_pan: [f32; 2],
@@ -1021,6 +1022,7 @@ impl App {
             carousel_view: CarouselView::default(),
             box_scene: BoxScene::Carousel,
             box_open_from: boxview::BoxPose { center: [0.0, 0.0], scale: slot_ui::BOX_VIEW_SCALE, angle: 0.0 },
+            manual_cover: None,
             box_focus: 0.0,
             box_zoom: 1.0,
             box_pan: [0.0, 0.0],
@@ -2421,6 +2423,23 @@ impl App {
         Some((cart, faces, dimensions))
     }
 
+    pub fn manual_cover_want(&self) -> Option<Cart> {
+        if self.carousel_view != CarouselView::Boxes {
+            return None;
+        }
+        self.selected_box().map(|(cart, _, _)| cart.clone())
+    }
+
+    pub fn set_manual_cover(&mut self, cover: Option<(Cart, TexId)>) {
+        self.manual_cover = cover;
+    }
+
+    fn selected_manual_cover(&self) -> Option<TexId> {
+        let (cart, tex) = self.manual_cover.as_ref()?;
+        let (selected, _, _) = self.selected_box()?;
+        (cart.platform == selected.platform && cart.stem == selected.stem).then_some(*tex)
+    }
+
     fn tick_box_scene(&mut self) {
         let now = self.now();
         if let BoxScene::PreparingClose { started, angle } = self.box_scene {
@@ -2501,7 +2520,11 @@ impl App {
             _ => return,
         };
         if !inspecting {
-            let target = if item == BoxItem::Box { 1.0 } else { 0.0 };
+            let target = match item {
+                BoxItem::Manual => -1.0,
+                BoxItem::Cartridge => 0.0,
+                BoxItem::Box => 1.0,
+            };
             let step = BOX_FOCUS_SPEED * dt.max(0.0);
             self.box_focus = if target > self.box_focus {
                 (self.box_focus + step).min(target)
@@ -2730,6 +2753,16 @@ impl App {
                     self.play_held = None;
                     true
                 }
+                Action::GbaDown(Btn::Up) if item == BoxItem::Cartridge && self.selected_manual_cover().is_some() => {
+                    self.box_scene = BoxScene::Open { item: BoxItem::Manual };
+                    self.box_pending = None;
+                    self.play_held = None;
+                    true
+                }
+                Action::GbaDown(Btn::Down) if item == BoxItem::Manual => {
+                    self.box_scene = BoxScene::Open { item: BoxItem::Cartridge };
+                    true
+                }
                 Action::GbaDown(Btn::Up) if item == BoxItem::Box => {
                     self.box_scene = BoxScene::Open { item: BoxItem::Cartridge };
                     self.box_zoom = 1.0;
@@ -2739,21 +2772,21 @@ impl App {
                     true
                 }
                 Action::GbaDown(Btn::Up | Btn::Down) => true,
-                Action::GbaUp(Btn::A) if item == BoxItem::Cartridge && self.box_focus > 0.001 => {
+                Action::GbaUp(Btn::A) if item == BoxItem::Cartridge && self.box_focus.abs() > 0.001 => {
                     if self.play_held.take().is_some() {
                         self.box_pending = Some(BoxCartAction::Play(!self.state.auto_load));
                     }
                     true
                 }
-                Action::Insert if item == BoxItem::Cartridge && self.box_focus > 0.001 => {
+                Action::Insert if item == BoxItem::Cartridge && self.box_focus.abs() > 0.001 => {
                     self.box_pending = Some(BoxCartAction::Play(!self.state.auto_load));
                     true
                 }
-                Action::GbaDown(Btn::Start) if item == BoxItem::Cartridge && self.box_focus > 0.001 => {
+                Action::GbaDown(Btn::Start) if item == BoxItem::Cartridge && self.box_focus.abs() > 0.001 => {
                     self.box_pending = Some(BoxCartAction::Picker);
                     true
                 }
-                Action::SelectTap if item == BoxItem::Cartridge && self.box_focus > 0.001 => {
+                Action::SelectTap if item == BoxItem::Cartridge && self.box_focus.abs() > 0.001 => {
                     self.box_pending = Some(BoxCartAction::Studio);
                     true
                 }
@@ -2762,6 +2795,9 @@ impl App {
                     true
                 }
                 Action::GbaDown(Btn::Start) | Action::SelectTap if item == BoxItem::Box => true,
+                Action::GbaDown(Btn::A | Btn::Start | Btn::Select)
+                    | Action::GbaUp(Btn::A | Btn::Select)
+                    | Action::Insert | Action::SelectTap if item == BoxItem::Manual => true,
                 _ => false,
             },
             _ => false,
@@ -5706,7 +5742,7 @@ impl App {
         let move_to_center = smooth((ms - 1330.0) / 170.0)
             * (1.0 - smooth((self.box_focus - BOX_FOCUS_CART_DOWN) / (BOX_FOCUS_BOX_MOVE - BOX_FOCUS_CART_DOWN)));
         let pickup = smooth((ms - 1500.0) / 150.0)
-            * (1.0 - smooth(self.box_focus / BOX_FOCUS_CART_DOWN));
+            * (1.0 - smooth(self.box_focus.abs() / BOX_FOCUS_CART_DOWN));
         let flap = smooth((ms - 280.0) / 430.0)
             * (1.0 - smooth((ms - 1130.0) / 370.0));
         let lid = (std::f32::consts::FRAC_PI_2 * smooth(flap * 2.0)).sin();
@@ -5715,7 +5751,15 @@ impl App {
         let (w, h) = (front_w * scale, front_h * scale);
         let selected_y = canvas.h / 2.0;
         let parked_y = canvas.h + h * 0.15;
-        let box_y = parked_y + (selected_y - parked_y) * smooth((self.box_focus - BOX_FOCUS_BOX_MOVE) / (1.0 - BOX_FOCUS_BOX_MOVE));
+        let (_, ch) = slot_ui::cart_box(cart.platform);
+        let target_y = slot_ui::rest_y(ch as f32) + ch as f32 / 2.0;
+        let (manual_w, manual_h) = slot_ui::manual_dimensions();
+        let (manual_w, manual_h) = (manual_w * scale, manual_h * scale);
+        let (small_w, small_h) = slot_ui::loose_cart_dimensions(cart);
+        let (small_w, small_h) = (small_w * scale, small_h * scale);
+        let manual_shift = (12.0 + (manual_h + small_h) / 2.0)
+            * smooth(-self.box_focus) * p;
+        let box_y = parked_y + (selected_y - parked_y) * smooth((self.box_focus - BOX_FOCUS_BOX_MOVE) / (1.0 - BOX_FOCUS_BOX_MOVE)) + manual_shift;
         let origin = if matches!(self.box_scene, BoxScene::Closing { .. }) {
             let (center, scale, angle) = self.shelf().selected_box_pose(canvas);
             boxview::BoxPose { center, scale, angle }
@@ -5727,6 +5771,14 @@ impl App {
             origin.center[0] + (canvas.w / 2.0 + self.box_pan[0] - origin.center[0]) * travel,
             origin.center[1] + (box_y + self.box_pan[1] - origin.center[1]) * travel,
         ];
+        let (cw, ch) = slot_ui::cart_box(cart.platform);
+        let (cw, ch) = (cw as f32, ch as f32);
+        let small_center_y = box_y - h / 2.0 - 12.0 - small_h / 2.0;
+        let emerging_y = box_y + small_h / 2.0;
+        let cy = emerging_y + (small_center_y - emerging_y) * extraction;
+        let cart_width = small_w + (cw - small_w) * pickup;
+        let cart_height = small_h + (ch - small_h) * pickup;
+        let cart_center_y = cy + (target_y + manual_shift - cy) * move_to_center;
         let face_scale = (origin.scale + (scale - origin.scale) * travel) * zoom;
         let angle = origin.angle * (1.0 - travel) + self.box_turn * travel;
         let flap_tex = faces.flap.filter(|_| lid > 0.001);
@@ -5784,23 +5836,26 @@ impl App {
         if box_behind_cart {
             draw_box(out);
         }
+        if extraction > 0.0 && !matches!(self.box_scene, BoxScene::QuickOpening { .. }) {
+            if let Some(tex) = self.selected_manual_cover() {
+                let emerging_y = box_y;
+                let target = cart_center_y - cart_height / 2.0 - 12.0 - manual_h;
+                out.push(Draw::Tex {
+                    x: canvas.w / 2.0 - manual_w / 2.0,
+                    y: emerging_y + (target - emerging_y) * extraction,
+                    w: manual_w,
+                    h: manual_h,
+                    tex,
+                    alpha: 1.0,
+                });
+            }
+        }
         if extraction > 0.0 {
-            let (small_w, small_h) = slot_ui::loose_cart_dimensions(cart);
-            let (small_w, small_h) = (small_w * scale, small_h * scale);
-            let (cw, ch) = slot_ui::cart_box(cart.platform);
-            let (cw, ch) = (cw as f32, ch as f32);
-            let small_center_y = box_y - h / 2.0 - 12.0 - small_h / 2.0;
-            let emerging_y = box_y + small_h / 2.0;
-            let cy = emerging_y + (small_center_y - emerging_y) * extraction;
-            let target_y = slot_ui::rest_y(ch) + ch / 2.0;
-            let width = small_w + (cw - small_w) * pickup;
-            let height = small_h + (ch - small_h) * pickup;
-            let cy = cy + (target_y - cy) * move_to_center;
             self.shelf().draw_cart_at(self.shelf().index, [
-                canvas.w / 2.0 - width / 2.0,
-                cy - height / 2.0,
-                width,
-                height,
+                canvas.w / 2.0 - cart_width / 2.0,
+                cart_center_y - cart_height / 2.0,
+                cart_width,
+                cart_height,
             ], out);
         }
         if !box_behind_cart {
@@ -5809,11 +5864,26 @@ impl App {
     }
 
     fn draw_open_box_backdrop(&self, recede: f32, dim: f32, distance: f32, out: &mut Vec<Draw>) {
-        let Some((_, faces, (w, h, depth))) = self.selected_box() else {
+        let Some((cart, faces, (w, h, depth))) = self.selected_box() else {
             return;
         };
         let canvas = self.canvas();
         let scale = slot_ui::BOX_VIEW_SCALE;
+        if !matches!(self.box_scene, BoxScene::QuickOpening { .. }) {
+            if let Some(tex) = self.selected_manual_cover() {
+                let (mw, mh) = slot_ui::manual_dimensions();
+                let (mw, mh) = (mw * scale, mh * scale);
+                let (_, ch) = slot_ui::cart_box(cart.platform);
+                out.push(Draw::Tex {
+                    x: canvas.w / 2.0 - mw / 2.0,
+                    y: slot_ui::rest_y(ch as f32) - 12.0 - mh - distance * recede,
+                    w: mw,
+                    h: mh,
+                    tex,
+                    alpha: (1.0 - recede) * dim,
+                });
+            }
+        }
         slot_ui::draw_rotated_box(
             faces,
             (w * scale, h * scale, depth * scale),
@@ -6022,6 +6092,8 @@ impl App {
                                     let left = if self.box_zoom > 1.001 { legends[4] } else { legends[1] };
                                     self.draw_spread_legends(&[left, legends[3]], LINK_LEGEND_Y, bar_alpha, out);
                                 }
+                                BoxScene::Open { item: BoxItem::Manual } =>
+                                    self.draw_spread_legends(&[legends[1]], LINK_LEGEND_Y, bar_alpha, out),
                                 BoxScene::PreparingClose { .. } | BoxScene::Closing { .. } => {
                                     let action = if self.box_focus > BOX_FOCUS_BOX_MOVE { legends[3] } else { legends[2] };
                                     self.draw_spread_legends(&[legends[1], action], LINK_LEGEND_Y, bar_alpha, out);
@@ -6970,7 +7042,7 @@ impl App {
             {
                 self.start_box_open(true, true);
             } else if matches!(self.box_scene, BoxScene::Open { item: BoxItem::Cartridge })
-                && self.box_focus > 0.001
+                && self.box_focus.abs() > 0.001
             {
                 self.play_held = None;
                 self.box_pending = Some(BoxCartAction::Play(true));

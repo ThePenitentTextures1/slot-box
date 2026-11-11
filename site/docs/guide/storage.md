@@ -10,6 +10,7 @@ If you use two cards, all of this is on the one in `SD2`.
 |-----------------------------------------|-------------------------------------|
 | `Games/GBA`, `Games/GBAV`, `Games/GB`, `Games/GBC`     | Your games                          |
 | `Labels/GBA`, `Labels/GBAV`, `Labels/GB`, `Labels/GBC` | Cart labels                         |
+| `Manuals/GBA`, `Manuals/GBAV`, `Manuals/GB`, `Manuals/GBC` | Manual page images             |
 | `Saves/`                                | Battery saves, the game's own saves |
 | `States/`                               | Save states                         |
 | `Screenshots/`                          | Your screenshots                    |
@@ -44,6 +45,17 @@ Put games right in the folder. slot doesn't look inside subdirectories.
 Everything about a game hangs off its file name: its battery save, save states, label, cart shell and emulator choice.
 
 If you rename `Metroid Fusion.gba`, rename its save in `Saves/GBA` too, or slot won't find it.
+
+Manual pages are discovered in `Manuals/<system>/<game>/` using the game file's
+name without its extension. Name the PNGs `<game>_page_<number>_image_1.png`;
+page numbers are read numerically, not alphabetically. For example:
+`Manuals/GBA/Metroid Fusion/Metroid Fusion_page_1_image_1.png`.
+At startup, slot resizes matching pages for games on the card that are taller
+than 960 pixels in the background, replacing those PNGs on the card. Smaller
+pages are left unchanged. Keep a backup elsewhere if you want to retain the
+original full-resolution images. Pages that cannot be safely resized are
+left unchanged and the error is logged. The first numbered page appears as the
+manual cover in Open Box View; reading the other pages is not yet implemented.
 
 ## Saves and states
 

@@ -51,7 +51,9 @@ box-specific controls in addition to the collection controls:
 | <kbd>B</kbd> | No action on the carousel; returns to it from Open Box View |
 
 The cartridge is selected first in Open Box View. Press <kbd>Down</kbd> to select the box and
-<kbd>Up</kbd> to return to the cartridge. With the cartridge selected, the
+<kbd>Up</kbd> to return to the cartridge. When a manual is available, press
+<kbd>Up</kbd> from the cartridge to select its cover, and <kbd>Down</kbd> to
+return. Opening and reading manual pages is not yet available. With the cartridge selected, the
 cartridge controls above apply. Open the box to change the emulator or use
 Cartridge Studio. Games without box art retain the regular cartridge controls
 directly on the carousel.

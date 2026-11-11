@@ -18,6 +18,7 @@ mod gb_palette;
 mod gba;
 mod guides;
 pub mod ini;
+mod manuals;
 mod platform;
 mod ring;
 mod scan;
@@ -48,6 +49,7 @@ pub use guides::{
     decode_guide, find_guide, read_guide, read_guide_spot, write_guide_spot, GuideSpot, GUIDES_DIR,
     GUIDE_SPOTS_FILE,
 };
+pub use manuals::{manual_pages, ManualPage, MANUALS_DIR};
 pub use platform::Platform;
 pub use ring::{is_stamp, StateEntry, StateRing, RING_MAX};
 pub use scan::{initial, is_hidden, listing, scan, scan_platform, sort_key, Cart, StoreError};

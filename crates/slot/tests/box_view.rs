@@ -830,6 +830,108 @@ fn vertical_open_box_preserves_scale_and_cartridge_geometry() {
 }
 
 #[test]
+fn manual_cover_extracts_to_scale_and_can_be_selected_and_put_down() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    let mut app = setup(root.path());
+    let cart = app.manual_cover_want().unwrap();
+    let manual = TexId::from_raw(9000);
+    app.set_manual_cover(Some((cart, manual)));
+    assert!(face(&app, manual).is_none());
+    app.apply(Action::GbaDown(Btn::A));
+    app.apply(Action::GbaUp(Btn::A));
+    app.update(0.7);
+    assert!(face(&app, manual).is_none(), "cover stays inside the box until extraction");
+    app.update(0.55);
+    assert!(face(&app, manual).is_some(), "cover is pulled out with the cartridge");
+    app.update(0.53);
+    let parked = face(&app, manual).unwrap();
+    let box_face = face(&app, textures(1000).front).unwrap();
+    let box_w = box_face[1][0] - box_face[0][0];
+    let box_h = box_face[3][1] - box_face[0][1];
+    assert!(((parked[1][0] - parked[0][0]) / box_w - 115.0 / 125.0).abs() < 0.001);
+    assert!(((parked[3][1] - parked[0][1]) / box_h - 85.0 / 125.0).abs() < 0.001);
+    let picked_cart = face(&app, TexId::from_raw(2000)).unwrap();
+    assert!(parked[3][1] < picked_cart[0][1]);
+    app.apply(Action::GbaDown(Btn::Up));
+    app.update(1.0);
+    let selected = face(&app, manual).unwrap();
+    assert!((selected[1][0] - selected[0][0] - (parked[1][0] - parked[0][0])).abs() < 0.001);
+    let cart = face(&app, TexId::from_raw(2000)).unwrap();
+    assert!(selected[3][1] < cart[0][1], "the loose cartridge is below the manual");
+    assert!(((selected[0][1] + selected[3][1]) / 2.0 - (picked_cart[0][1] + picked_cart[3][1]) / 2.0).abs() < 0.01);
+    common::through(&mut app, Btn::A);
+    app.update(0.6);
+    assert!(matches!(app.phase(), Phase::Shelf), "manual selection must not launch the game");
+    app.apply(Action::GbaDown(Btn::Down));
+    app.update(1.0);
+    equal_pose(picked_cart, face(&app, TexId::from_raw(2000)).unwrap());
+    equal_pose(parked, face(&app, manual).unwrap());
+    app.apply(Action::GbaDown(Btn::Down));
+    app.update(1.0);
+    let box_face = face(&app, textures(1000).front).unwrap();
+    let cart = face(&app, TexId::from_raw(2000)).unwrap();
+    assert!(cart[3][1] < box_face[0][1]);
+    let manual_face = face(&app, manual).unwrap();
+    assert!(manual_face[3][1] < cart[0][1], "the manual stays above the cartridge when the box is selected");
+}
+
+#[test]
+fn closing_and_launching_move_the_manual_out_of_view() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    let mut app = setup(root.path());
+    let manual = TexId::from_raw(9000);
+    app.set_manual_cover(Some((app.manual_cover_want().unwrap(), manual)));
+    open(&mut app);
+    let parked = face(&app, manual).unwrap();
+    common::through(&mut app, Btn::A);
+    assert!(matches!(app.phase(), Phase::Inserting { .. }));
+    app.update(0.15);
+    let moving = face(&app, manual).unwrap();
+    assert!(moving[0][1] < parked[0][1]);
+    app.update(1.0);
+    assert!(face(&app, manual).is_none() || face(&app, manual).unwrap()[3][1] < 0.0);
+
+    let mut app = setup(root.path());
+    app.set_manual_cover(Some((app.manual_cover_want().unwrap(), manual)));
+    open(&mut app);
+    app.apply(Action::GbaDown(Btn::Up));
+    app.update(1.0);
+    let selected = face(&app, manual).unwrap();
+    app.apply(Action::GbaDown(Btn::B));
+    equal_pose(selected, face(&app, manual).unwrap());
+    app.update(1.81);
+    assert!(face(&app, manual).is_none());
+}
+
+#[test]
+fn no_manual_leaves_cartridge_as_the_top_item() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    let mut app = setup(root.path());
+    open(&mut app);
+    let cart = face(&app, TexId::from_raw(2000)).unwrap();
+    app.apply(Action::GbaDown(Btn::Up));
+    app.update(1.0);
+    equal_pose(cart, face(&app, TexId::from_raw(2000)).unwrap());
+    common::through(&mut app, Btn::A);
+    assert!(matches!(app.phase(), Phase::Inserting { .. }));
+}
+
+#[test]
+fn cartridge_actions_wait_when_returning_from_the_manual() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    let mut app = setup(root.path());
+    app.set_manual_cover(Some((app.manual_cover_want().unwrap(), TexId::from_raw(9000))));
+    open(&mut app);
+    app.apply(Action::GbaDown(Btn::Up));
+    app.update(1.0);
+    app.apply(Action::GbaDown(Btn::Down));
+    common::through(&mut app, Btn::A);
+    assert!(matches!(app.phase(), Phase::Shelf));
+    app.update(1.0);
+    assert!(matches!(app.phase(), Phase::Inserting { .. }));
+}
+
+#[test]
 fn open_box_controls_flip_zoom_pan_and_close_without_changing_shelf() {
     let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
     let mut app = setup(root.path());

@@ -46,6 +46,8 @@ pub struct Frontend {
     faces: FaceBuilder,
     cart_faces: CartFaces,
     box_faces: crate::box_faces::BoxFaces,
+    manual_covers: crate::manual_covers::ManualCovers,
+    _manual_resize: crate::manual_resize::Worker,
     rebuild: Option<Rebuild>,
     stale_check: Option<std::sync::mpsc::Receiver<Vec<slot_store::Cart>>>,
     ui_faces: Option<std::sync::mpsc::Receiver<UiFaces>>,
@@ -498,6 +500,7 @@ impl Frontend {
         let now = Instant::now();
         let cart_faces = CartFaces::spawn(platform.root().to_path_buf());
         let box_faces = crate::box_faces::BoxFaces::spawn(platform.root().to_path_buf());
+        let manual_covers = crate::manual_covers::ManualCovers::spawn(platform.root().to_path_buf());
         save_headers_when_changed(platform.root().to_path_buf());
         let lid_root = platform.root().to_path_buf();
         let mut session = Session::boot_with(platform.root().to_path_buf(), sink);
@@ -527,6 +530,10 @@ impl Frontend {
         crate::boot_time::mark("session");
         let stale_check =
             Self::check_labels(platform.root(), session.app().carts().cloned().collect());
+        let manual_resize = crate::manual_resize::Worker::start(
+            platform.root().to_path_buf(),
+            session.app().carts().cloned().collect(),
+        );
         session
             .app_mut()
             .set_power(Power::new(platform, DOZE_TIMEOUT));
@@ -540,6 +547,8 @@ impl Frontend {
             faces: FaceBuilder::spawn(lid_root),
             cart_faces,
             box_faces,
+            manual_covers,
+            _manual_resize: manual_resize,
             rebuild: None,
             stale_check,
             ui_faces: None,
@@ -604,6 +613,7 @@ impl Frontend {
         if self.rebuild.is_none() {
             self.cart_faces.sync(self.session.app_mut(), compositor);
             self.box_faces.sync(self.session.app_mut(), compositor);
+            self.manual_covers.sync(self.session.app_mut(), compositor);
         }
         crate::boot_time::mark("cart faces");
         let (tx, rx) = std::sync::mpsc::channel();
@@ -1047,6 +1057,7 @@ impl Frontend {
         }
         self.cart_faces.sync(self.session.app_mut(), compositor);
         self.box_faces.sync(self.session.app_mut(), compositor);
+        self.manual_covers.sync(self.session.app_mut(), compositor);
         sync_clock(self.session.app_mut(), compositor, &mut self.clocks);
         sync_binding_faces(self.session.app_mut(), compositor);
         sync_about(self.session.app_mut(), compositor, &mut self.about);

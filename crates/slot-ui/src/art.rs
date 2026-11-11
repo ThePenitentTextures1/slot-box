@@ -98,6 +98,45 @@ pub fn decode_png_bytes(bytes: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
     Some(orient(rgba, info.width, info.height, orientation))
 }
 
+pub fn decode_png16_bytes(bytes: &[u8]) -> Option<(Vec<u16>, u32, u32)> {
+    let orientation = exif_chunk(bytes).and_then(exif_orientation).unwrap_or(1);
+    let mut dec = png::Decoder::new(bytes);
+    dec.set_transformations(png::Transformations::EXPAND);
+    dec.set_limits(png::Limits { bytes: 128 << 20 });
+    let mut reader = dec.read_info().ok()?;
+    let mut buf = vec![0u8; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).ok()?;
+    if info.bit_depth != png::BitDepth::Sixteen {
+        return None;
+    }
+    let channels = match info.color_type {
+        png::ColorType::Grayscale => 1,
+        png::ColorType::GrayscaleAlpha => 2,
+        png::ColorType::Rgb => 3,
+        png::ColorType::Rgba => 4,
+        png::ColorType::Indexed => return None,
+    };
+    let src = &buf[..info.buffer_size()];
+    let pixels = (info.width as usize).checked_mul(info.height as usize)?;
+    let mut rgba = Vec::with_capacity(pixels.checked_mul(4)?);
+    for pixel in src.chunks_exact(channels * 2) {
+        let sample = |i: usize| u16::from_be_bytes([pixel[i * 2], pixel[i * 2 + 1]]);
+        match info.color_type {
+            png::ColorType::Grayscale => rgba.extend([sample(0), sample(0), sample(0), u16::MAX]),
+            png::ColorType::GrayscaleAlpha => {
+                rgba.extend([sample(0), sample(0), sample(0), sample(1)])
+            }
+            png::ColorType::Rgb => rgba.extend([sample(0), sample(1), sample(2), u16::MAX]),
+            png::ColorType::Rgba => rgba.extend([sample(0), sample(1), sample(2), sample(3)]),
+            png::ColorType::Indexed => return None,
+        }
+    }
+    if rgba.len() != pixels * 4 {
+        return None;
+    }
+    Some(orient(rgba, info.width, info.height, orientation))
+}
+
 fn exif_chunk(png: &[u8]) -> Option<&[u8]> {
     let mut at = 8;
     loop {
@@ -141,12 +180,12 @@ fn exif_orientation(exif: &[u8]) -> Option<u16> {
         .and_then(|e| u16_at(e + 8))
 }
 
-fn orient(src: Vec<u8>, w: u32, h: u32, orientation: u16) -> (Vec<u8>, u32, u32) {
+fn orient<T: Copy + Default>(src: Vec<T>, w: u32, h: u32, orientation: u16) -> (Vec<T>, u32, u32) {
     if !(2..=8).contains(&orientation) {
         return (src, w, h);
     }
     let (dw, dh) = if orientation >= 5 { (h, w) } else { (w, h) };
-    let mut out = vec![0u8; src.len()];
+    let mut out = vec![T::default(); src.len()];
     for y in 0..dh {
         for x in 0..dw {
             let (sx, sy) = match orientation {

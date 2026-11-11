@@ -54,6 +54,10 @@ pub fn loose_cart_dimensions(cart: &Cart) -> (f32, f32) {
     )
 }
 
+pub fn manual_dimensions() -> (f32, f32) {
+    (115.0 * BOX_PIXELS_PER_MM, 85.0 * BOX_PIXELS_PER_MM)
+}
+
 pub fn box_size(platform: Platform) -> (u32, u32) {
     match platform {
         Platform::Gba | Platform::Gbav => (318, 282),

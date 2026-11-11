@@ -3,7 +3,7 @@ use slot_gfx::Canvas;
 use slot_ui::Millis;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub enum Item { Cartridge, Box }
+pub enum Item { Manual, Cartridge, Box }
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct BoxPose {
     pub center: [f32; 2],

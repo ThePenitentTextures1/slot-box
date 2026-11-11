@@ -1,5 +1,5 @@
 mod art;
-pub use art::{cover, cover_bytes, decode_png_bytes};
+pub use art::{cover, cover_bytes, decode_png16_bytes, decode_png_bytes};
 mod bitmaps;
 pub use bitmaps::{
     link_port, link_port_light, slot_back, slot_back_light, slot_front, slot_front_light,
@@ -120,7 +120,7 @@ pub use quick_menu::{
 pub use rebuild::{headline_face, rebuild_count_face, rebuild_title_face, RebuildScreen};
 pub use refusal::Refusal;
 pub use shelf::{
-    box_size, box_view_dimensions, loose_cart_dimensions, foot_y, repeat_gap, rest_y, BoxFaceTextures, Shelf,
+    box_size, box_view_dimensions, loose_cart_dimensions, manual_dimensions, foot_y, repeat_gap, rest_y, BoxFaceTextures, Shelf,
     BOX_VIEW_SCALE, HEART_INK, HEART_SCALE,
     REPEAT_DELAY_MS,
 };

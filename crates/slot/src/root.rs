@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-pub const DIRS: [&str; 42] = [
+pub const DIRS: [&str; 46] = [
     "BIOS",
     "Bezels",
     "Bezels/GBA",
@@ -30,6 +30,10 @@ pub const DIRS: [&str; 42] = [
     "Boxes/GB",
     "Boxes/GBC",
     "Manuals",
+    "Manuals/GBA",
+    "Manuals/GBAV",
+    "Manuals/GB",
+    "Manuals/GBC",
     "Logs",
     "Saves",
     "Saves/GBA",
@@ -70,7 +74,7 @@ pub fn move_label_cache(root: &Path) {
 }
 
 pub fn sweep_temps(root: &Path) {
-    for sub in ["Config", "Saves", "States"] {
+    for sub in ["Config", "Saves", "States", "Manuals"] {
         slot_store::sweep_temps(&root.join(sub));
     }
 }
