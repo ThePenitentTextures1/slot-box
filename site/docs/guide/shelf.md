@@ -53,10 +53,18 @@ box-specific controls in addition to the collection controls:
 The cartridge is selected first in Open Box View. Press <kbd>Down</kbd> to select the box and
 <kbd>Up</kbd> to return to the cartridge. When a manual is available, press
 <kbd>Up</kbd> from the cartridge to select its cover, and <kbd>Down</kbd> to
-return. Opening and reading manual pages is not yet available. With the cartridge selected, the
+return. With the cartridge selected, the
 cartridge controls above apply. Open the box to change the emulator or use
 Cartridge Studio. Games without box art retain the regular cartridge controls
 directly on the carousel.
+
+With the manual selected, press <kbd>A</kbd> to pick it up. <kbd>Left</kbd> and
+<kbd>Right</kbd> move through the cover, facing pages, and back cover. Hold
+<kbd>R1</kbd> or <kbd>L1</kbd> to zoom in or out; while zoomed, hold a
+direction to pan instead of turning pages. On devices with a left stick, it can
+also pan while zoomed. <kbd>B</kbd> resets the zoom, or puts the manual down
+when it is at its normal size. Missing manuals leave the cartridge as the
+topmost item.
 
 With the box selected, <kbd>A</kbd> flips it, <kbd>R1</kbd> zooms in, and
 <kbd>L1</kbd> zooms out. While zoomed, hold a direction to pan and press

@@ -1,4 +1,4 @@
-//! Background loading of the selected game's manual cover.
+//! Background loading of the selected game's manual cover and nearby pages.
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Condvar, Mutex};
@@ -17,10 +17,60 @@ struct Queue {
 
 pub struct ManualCovers {
     queue: Arc<(Mutex<Queue>, Condvar)>,
-    results: mpsc::Receiver<(u64, Cart, Option<CartFace>)>,
+    results: mpsc::Receiver<(u64, Cart, std::io::Result<(Vec<slot_store::ManualPage>, Option<CartFace>)>)>,
     wanted: Option<Cart>,
     generation: u64,
     texture: Option<TexId>,
+    pages: Vec<slot_store::ManualPage>,
+    page_worker: PageWorker,
+    page_textures: Vec<(usize, TexId)>,
+    free: Vec<TexId>,
+    requested: Vec<usize>,
+}
+
+struct PageWorker {
+    queue: Arc<(Mutex<PageQueue>, Condvar)>,
+    results: mpsc::Receiver<(u64, usize, std::io::Result<CartFace>)>,
+}
+
+struct PageQueue {
+    pending: std::collections::VecDeque<(u64, usize, PathBuf)>,
+    closed: bool,
+}
+
+impl PageWorker {
+    fn spawn() -> Self {
+        let queue = Arc::new((Mutex::new(PageQueue {
+            pending: std::collections::VecDeque::new(), closed: false,
+        }), Condvar::new()));
+        let worker_queue = Arc::clone(&queue);
+        let (sender, results) = mpsc::sync_channel(2);
+        if let Err(e) = thread::Builder::new().name("slot-manual-pages".into()).spawn(move || {
+            let (lock, wake) = &*worker_queue;
+            loop {
+                let (generation, index, path) = {
+                    let mut queue = lock.lock().unwrap_or_else(|e| e.into_inner());
+                    while !queue.closed && queue.pending.is_empty() {
+                        queue = wake.wait(queue).unwrap_or_else(|e| e.into_inner());
+                    }
+                    if queue.closed { return; }
+                    queue.pending.pop_front().expect("pending manual page")
+                };
+                if sender.send((generation, index, load_page(&path))).is_err() { return; }
+            }
+        }) {
+            eprintln!("slot: manual pages: worker failed to start: {e}");
+        }
+        Self { queue, results }
+    }
+}
+
+impl Drop for PageWorker {
+    fn drop(&mut self) {
+        let (lock, wake) = &*self.queue;
+        lock.lock().unwrap_or_else(|e| e.into_inner()).closed = true;
+        wake.notify_all();
+    }
 }
 
 impl ManualCovers {
@@ -49,13 +99,10 @@ impl ManualCovers {
                         }
                         queue.pending.take().expect("pending manual cover")
                     };
-                    let cover = match load_cover(&root, &cart) {
-                        Ok(cover) => cover,
-                        Err(e) => {
-                            eprintln!("slot: manual cover {}: {e}", cart.stem);
-                            None
-                        }
-                    };
+                    let cover = slot_store::manual_pages(&root, &cart).and_then(|pages| {
+                        let cover = pages.first().map(|p| load_page(&p.path)).transpose()?;
+                        Ok((pages, cover))
+                    });
                     if sender.send((generation, cart, cover)).is_err() {
                         return;
                     }
@@ -70,6 +117,11 @@ impl ManualCovers {
             wanted: None,
             generation: 0,
             texture: None,
+            pages: Vec::new(),
+            page_worker: PageWorker::spawn(),
+            page_textures: Vec::new(),
+            free: Vec::new(),
+            requested: Vec::new(),
         }
     }
 
@@ -93,21 +145,67 @@ impl ManualCovers {
             self.generation = self.generation.wrapping_add(1);
             self.wanted = want.clone();
             app.set_manual_cover(None);
+            app.set_manual_page_count(0);
+            app.set_manual_page_textures(Vec::new());
+            self.pages.clear();
+            self.requested.clear();
+            self.free.extend(self.page_textures.drain(..).map(|(_, tex)| tex));
+            self.page_worker.queue.0.lock().unwrap_or_else(|e| e.into_inner()).pending.clear();
             let (lock, wake) = &*self.queue;
             lock.lock().unwrap_or_else(|e| e.into_inner()).pending =
                 want.map(|cart| (self.generation, cart));
             wake.notify_one();
         }
-        while let Ok((generation, cart, cover)) = self.results.try_recv() {
+        while let Ok((generation, cart, result)) = self.results.try_recv() {
             if generation != self.generation || self.wanted.as_ref() != Some(&cart) {
                 continue;
             }
-            if let Some(cover) = cover {
-                let tex = upload(self.texture, cover);
-                self.texture = Some(tex);
-                app.set_manual_cover(Some((cart, tex)));
+            match result {
+                Ok((pages, Some(cover))) => {
+                    let tex = upload(self.texture, cover);
+                    self.texture = Some(tex);
+                    app.set_manual_page_count(pages.len());
+                    self.pages = pages;
+                    app.set_manual_cover(Some((cart, tex)));
+                }
+                Ok(_) => {}
+                Err(e) => eprintln!("slot: manual cover {}: {e}", cart.stem),
             }
         }
+        let wants = app.manual_page_wants();
+        self.page_textures.retain(|(index, tex)| {
+            if wants.contains(index) { true } else { self.free.push(*tex); false }
+        });
+        self.requested.retain(|i| wants.contains(i));
+        {
+            let (lock, wake) = &*self.page_worker.queue;
+            let mut queue = lock.lock().unwrap_or_else(|e| e.into_inner());
+            queue.pending.retain(|(generation, index, _)| *generation == self.generation && wants.contains(index));
+            for index in &wants {
+                if !self.requested.contains(index) && !self.page_textures.iter().any(|(i, _)| i == index) {
+                    if let Some(page) = self.pages.get(*index) {
+                        self.requested.push(*index);
+                        queue.pending.push_back((self.generation, *index, page.path.clone()));
+                    }
+                }
+            }
+            wake.notify_one();
+        }
+        while let Ok((generation, index, result)) = self.page_worker.results.try_recv() {
+            if generation != self.generation || !wants.contains(&index)
+                || self.page_textures.iter().any(|(i, _)| *i == index) { continue; }
+            match result {
+                Ok(page) => {
+                    let tex = upload(self.free.pop(), page);
+                    self.page_textures.push((index, tex));
+                }
+                Err(e) => {
+                    eprintln!("slot: manual page {}: {e}", index + 1);
+                    app.manual_page_failed(index);
+                }
+            }
+        }
+        app.set_manual_page_textures(self.page_textures.clone());
     }
 }
 
@@ -125,14 +223,18 @@ pub fn load_cover(root: &Path, cart: &Cart) -> std::io::Result<Option<CartFace>>
     let Some(page) = pages.first() else {
         return Ok(None);
     };
+    load_page(&page.path).map(Some)
+}
+
+fn load_page(path: &Path) -> std::io::Result<CartFace> {
     let mut bytes = Vec::new();
-    std::fs::File::open(&page.path)?
+    std::fs::File::open(path)?
         .take(crate::manual_resize::MAX_FILE_BYTES + 1)
         .read_to_end(&mut bytes)?;
     if bytes.len() as u64 > crate::manual_resize::MAX_FILE_BYTES {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "manual cover exceeds the file size limit",
+            "manual page exceeds the file size limit",
         ));
     }
     let reader = png::Decoder::new(bytes.as_slice())
@@ -143,13 +245,13 @@ pub fn load_cover(root: &Path, cart: &Cart) -> std::io::Result<Option<CartFace>>
     {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "manual cover exceeds the pixel limit",
+            "manual page exceeds the pixel limit",
         ));
     }
     let (rgba, w, h) = slot_ui::decode_png_bytes(&bytes).ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!("could not decode {}", page.path.display()),
+            format!("could not decode {}", path.display()),
         )
     })?;
     let (rgba, w, h) = if h > crate::manual_resize::MAX_HEIGHT {
@@ -159,7 +261,7 @@ pub fn load_cover(root: &Path, cart: &Cart) -> std::io::Result<Option<CartFace>>
     } else {
         (rgba, w, h)
     };
-    Ok(Some(CartFace { rgba, w, h }))
+    Ok(CartFace { rgba, w, h })
 }
 
 #[cfg(test)]
@@ -188,6 +290,14 @@ mod tests {
             writer.write_image_data(&colour.repeat(4)).unwrap();
             writer.finish().unwrap();
         }
+        let manual_dir = root.path().join("Manuals/GBA/Game");
+        let file = std::fs::File::create(manual_dir.join("Game_page_2_image_1.png")).unwrap();
+        let mut encoder = png::Encoder::new(file, 2, 2);
+        encoder.set_color(png::ColorType::Rgb);
+        let mut writer = encoder.write_header().unwrap();
+        writer.write_image_data(&[20, 200, 30].repeat(4)).unwrap();
+        writer.finish().unwrap();
+        std::fs::write(manual_dir.join("Game_page_3_image_1.png"), b"broken").unwrap();
         write_carousel_view(root.path(), CarouselView::Boxes).unwrap();
         let state = slot_store::SlotState {
             clock_set: true,
@@ -238,6 +348,30 @@ mod tests {
             .iter()
             .any(|draw| matches!(draw, Draw::Tex { tex, x, y, w, h, .. }
             if *tex == manual_tex && *x >= 0.0 && *y >= 0.0 && *w > 0.0 && *h > 0.0)));
+        app.apply(Action::GbaDown(Btn::A));
+        app.update(0.31);
+        let page_tex = TexId::from_raw(3);
+        let until = Instant::now() + Duration::from_secs(5);
+        let mut page_uploaded = false;
+        while (!page_uploaded || app.toast() != Some(slot_ui::Toast::ManualPageFailed))
+            && Instant::now() < until
+        {
+            covers.sync_with(&mut app, |_, face| {
+                assert_eq!(&face.rgba[..4], &[20, 200, 30, 255]);
+                page_uploaded = true;
+                page_tex
+            });
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(page_uploaded, "page worker did not load the PNG");
+        assert_eq!(app.toast(), Some(slot_ui::Toast::ManualPageFailed));
+        app.apply(Action::GbaDown(Btn::Right));
+        app.update(0.31);
+        draws.clear();
+        app.draw(&mut draws);
+        assert!(draws.iter().any(|draw| matches!(draw, Draw::Tex { tex, .. } if *tex == page_tex)));
+        app.apply(Action::GbaDown(Btn::B));
+        app.update(0.31);
         app.apply(Action::GbaDown(Btn::B));
         app.update(1.93);
         app.apply(Action::ShelfRight);

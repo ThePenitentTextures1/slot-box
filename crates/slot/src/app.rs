@@ -128,6 +128,12 @@ const BACK_ZOOM_MAX: f32 = 4.0;
 const LINK_TEXT_Y: f32 = 44.0;
 const LINK_LEGEND_Y: f32 = OUT_H as f32 - MOUTH_H;
 
+fn manual_page_size(canvas: slot_gfx::Canvas, spread: bool) -> (f32, f32) {
+    let columns = if spread { 2.0 } else { 1.0 };
+    let width = ((canvas.w - 24.0) / columns).min((LINK_LEGEND_Y - 24.0) * 115.0 / 85.0);
+    (width, width * 85.0 / 115.0)
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct StudioTex {
     pub faces: Vec<(crate::studio::LabelKind, TexId)>,
@@ -577,6 +583,9 @@ pub struct App {
     box_scene: BoxScene,
     box_open_from: boxview::BoxPose,
     manual_cover: Option<(Cart, TexId)>,
+    manual_page_count: usize,
+    manual_page_textures: Vec<(usize, TexId)>,
+    manual_reader: Option<boxview::ManualReader>,
     box_focus: f32,
     box_zoom: f32,
     box_pan: [f32; 2],
@@ -1023,6 +1032,9 @@ impl App {
             box_scene: BoxScene::Carousel,
             box_open_from: boxview::BoxPose { center: [0.0, 0.0], scale: slot_ui::BOX_VIEW_SCALE, angle: 0.0 },
             manual_cover: None,
+            manual_page_count: 0,
+            manual_page_textures: Vec::new(),
+            manual_reader: None,
             box_focus: 0.0,
             box_zoom: 1.0,
             box_pan: [0.0, 0.0],
@@ -2434,6 +2446,27 @@ impl App {
         self.manual_cover = cover;
     }
 
+    pub fn set_manual_page_count(&mut self, count: usize) {
+        self.manual_page_count = count;
+    }
+
+    pub fn set_manual_page_textures(&mut self, textures: Vec<(usize, TexId)>) {
+        self.manual_page_textures = textures;
+    }
+
+    pub fn manual_page_wants(&self) -> Vec<usize> {
+        self.manual_reader.as_ref().map_or_else(Vec::new, |reader| reader.wants())
+    }
+
+    pub fn manual_page_failed(&mut self, _index: usize) {
+        self.hud.toast(Toast::ManualPageFailed, self.now());
+    }
+
+    fn manual_page_texture(&self, index: usize) -> Option<TexId> {
+        if index == 0 { return self.selected_manual_cover(); }
+        self.manual_page_textures.iter().find(|(i, _)| *i == index).map(|(_, tex)| *tex)
+    }
+
     fn selected_manual_cover(&self) -> Option<TexId> {
         let (cart, tex) = self.manual_cover.as_ref()?;
         let (selected, _, _) = self.selected_box()?;
@@ -2513,6 +2546,7 @@ impl App {
     }
 
     fn tick_open_box(&mut self, dt: f32) {
+        let canvas = self.canvas();
         let inspecting = matches!(self.box_scene, BoxScene::Back { .. });
         let item = match self.box_scene {
             BoxScene::Open { item } => item,
@@ -2525,7 +2559,10 @@ impl App {
                 BoxItem::Cartridge => 0.0,
                 BoxItem::Box => 1.0,
             };
-            let step = BOX_FOCUS_SPEED * dt.max(0.0);
+            let speed = if target < 0.0 || (target == 0.0 && self.box_focus < 0.0) {
+                1.0 / 0.28
+            } else { BOX_FOCUS_SPEED };
+            let step = speed * dt.max(0.0);
             self.box_focus = if target > self.box_focus {
                 (self.box_focus + step).min(target)
             } else {
@@ -2545,6 +2582,56 @@ impl App {
         self.box_turn += (target_turn - self.box_turn) * blend;
         if (self.box_turn - target_turn).abs() < 0.001 {
             self.box_turn = target_turn;
+        }
+        if let Some(reader) = &mut self.manual_reader {
+            let spread = reader.spread(reader.page);
+            let focus = match spread[1] {
+                Some(right) if right == reader.page => -1.0,
+                Some(_) => 1.0,
+                None => 0.0,
+            };
+            reader.focus += (focus - reader.focus) * (1.0 - (-12.0 * dt.max(0.0)).exp());
+            if self.box_focus <= -0.999 {
+                let delta = dt.max(0.0) / boxview::MANUAL_PICKUP_SECONDS;
+                reader.pickup = if reader.closing {
+                    (reader.pickup - delta).max(0.0)
+                } else {
+                    (reader.pickup + delta).min(1.0)
+                };
+            }
+            if let Some((from, to, elapsed)) = reader.turn {
+                let elapsed = elapsed + dt.max(0.0);
+                reader.turn = (elapsed < boxview::MANUAL_TURN_SECONDS).then_some((from, to, elapsed));
+            }
+            let blend = 1.0 - (-12.0 * dt.max(0.0)).exp();
+            if reader.resetting {
+                reader.zoom += (1.0 - reader.zoom) * blend;
+                reader.pan[0] *= 1.0 - blend;
+                reader.pan[1] *= 1.0 - blend;
+                if reader.zoom < 1.001 && reader.pan[0].abs() < 0.1 && reader.pan[1].abs() < 0.1 {
+                    reader.zoom = 1.0;
+                    reader.pan = [0.0; 2];
+                    reader.resetting = false;
+                }
+            } else if reader.pickup >= 1.0 && !reader.closing && reader.turn.is_none() {
+                let delta = reader.buttons[0] as i32 - reader.buttons[1] as i32;
+                reader.zoom = (reader.zoom * (delta as f32 * dt.max(0.0) * 1.4).exp()).clamp(1.0, BACK_ZOOM_MAX);
+                if reader.zoom > 1.001 {
+                    reader.pan[0] += (reader.buttons[2] as i32 - reader.buttons[3] as i32) as f32 * dt.max(0.0) * 240.0;
+                    reader.pan[1] += (reader.buttons[4] as i32 - reader.buttons[5] as i32) as f32 * dt.max(0.0) * 240.0;
+                }
+            }
+            let (w, h) = manual_page_size(canvas, reader.spread(reader.page)[1].is_some());
+            let max_x = ((w * reader.zoom - canvas.w) / 2.0).max(0.0);
+            let max_y = ((h * reader.zoom - LINK_LEGEND_Y) / 2.0).max(0.0);
+            reader.pan[0] = reader.pan[0].clamp(-max_x, max_x);
+            reader.pan[1] = reader.pan[1].clamp(-max_y, max_y);
+            if reader.zoom <= 1.001 && !reader.resetting {
+                reader.pan = [0.0; 2];
+            }
+            if reader.closing && reader.pickup <= 0.0 && self.box_focus <= -0.999 {
+                self.manual_reader = None;
+            }
         }
         if item != BoxItem::Box {
             return;
@@ -2619,7 +2706,11 @@ impl App {
         }
         if self.box_scene != BoxScene::Carousel && self.selected_box().is_none() {
             self.box_scene = BoxScene::Carousel;
+            self.manual_reader = None;
             return false;
+        }
+        if self.manual_reader.is_some() {
+            return self.manual_input(action);
         }
         if matches!(
             self.box_scene,
@@ -2795,13 +2886,62 @@ impl App {
                     true
                 }
                 Action::GbaDown(Btn::Start) | Action::SelectTap if item == BoxItem::Box => true,
-                Action::GbaDown(Btn::A | Btn::Start | Btn::Select)
+                Action::GbaDown(Btn::A) | Action::Insert if item == BoxItem::Manual => {
+                    if self.manual_page_count > 0 {
+                        self.manual_reader = Some(boxview::ManualReader::new(self.manual_page_count));
+                        self.play_held = None;
+                    }
+                    true
+                }
+                Action::GbaDown(Btn::Start | Btn::Select)
                     | Action::GbaUp(Btn::A | Btn::Select)
-                    | Action::Insert | Action::SelectTap if item == BoxItem::Manual => true,
+                    | Action::SelectTap if item == BoxItem::Manual => true,
                 _ => false,
             },
             _ => false,
         }
+    }
+
+    fn manual_input(&mut self, action: Action) -> bool {
+        let reader = self.manual_reader.as_mut().expect("manual reader");
+        match action {
+            Action::GbaUp(Btn::R1) => reader.buttons[0] = false,
+            Action::GbaUp(Btn::L1) => reader.buttons[1] = false,
+            Action::GbaUp(b @ (Btn::Left | Btn::Right | Btn::Up | Btn::Down)) => {
+                let at = match b { Btn::Left => 2, Btn::Right => 3, Btn::Up => 4, _ => 5 };
+                reader.buttons[at] = false;
+            }
+            _ if reader.closing || reader.pickup < 1.0 => {}
+            Action::GbaDown(Btn::R1) if reader.turn.is_none() => reader.buttons[0] = true,
+            Action::GbaDown(Btn::L1) if reader.turn.is_none() => reader.buttons[1] = true,
+            Action::GbaDown(Btn::B) if reader.zoom > 1.001 || reader.resetting => {
+                reader.resetting = true;
+                reader.buttons = [false; 6];
+            }
+            Action::GbaDown(Btn::B) if reader.turn.is_none() => {
+                reader.closing = true;
+                reader.buttons = [false; 6];
+            }
+            Action::GbaDown(b @ (Btn::Left | Btn::Right | Btn::Up | Btn::Down))
+                if reader.zoom > 1.001 || reader.resetting => {
+                    let at = match b { Btn::Left => 2, Btn::Right => 3, Btn::Up => 4, _ => 5 };
+                    if !reader.resetting { reader.buttons[at] = true; }
+            }
+            Action::GbaDown(Btn::Left | Btn::Right) if reader.turn.is_none() && !reader.buttons[0] => {
+                let next = match action {
+                    Action::GbaDown(Btn::Left) => reader.page.saturating_sub(1),
+                    _ => (reader.page + 1).min(reader.count - 1),
+                };
+                if next != reader.page {
+                    if reader.spread(next) != reader.spread(reader.page) {
+                        reader.turn = Some((reader.page, next, 0.0));
+                    }
+                    reader.page = next;
+                }
+            }
+            _ => {}
+        }
+        true
     }
 
     pub fn box_face_wants(&self) -> Vec<FaceWant> {
@@ -3633,7 +3773,8 @@ impl App {
     }
 
     pub fn left_stick_dpad(&self) -> bool {
-        self.left_stick && self.state.left_stick_dpad
+        self.left_stick && (self.state.left_stick_dpad
+            || self.manual_reader.as_ref().is_some_and(|reader| reader.zoom > 1.001))
     }
 
     pub fn ff_speed(&self) -> u8 {
@@ -5837,7 +5978,9 @@ impl App {
             draw_box(out);
         }
         if extraction > 0.0 && !matches!(self.box_scene, BoxScene::QuickOpening { .. }) {
-            if let Some(tex) = self.selected_manual_cover() {
+            if let Some(tex) = self.selected_manual_cover().filter(|_| {
+                self.manual_reader.is_none() || self.box_focus > -0.999
+            }) {
                 let emerging_y = box_y;
                 let target = cart_center_y - cart_height / 2.0 - 12.0 - manual_h;
                 out.push(Draw::Tex {
@@ -5860,6 +6003,75 @@ impl App {
         }
         if !box_behind_cart {
             draw_box(out);
+        }
+        if self.manual_reader.is_some() && self.box_focus <= -0.999 {
+            self.draw_manual_reader(target_y, out);
+        }
+    }
+
+    fn draw_manual_reader(&self, target_y: f32, out: &mut Vec<Draw>) {
+        let Some(reader) = &self.manual_reader else { return };
+        let canvas = self.canvas();
+        let progress = reader.pickup * reader.pickup * (3.0 - 2.0 * reader.pickup);
+        let (small_w, small_h) = slot_ui::manual_dimensions();
+        let small_w = small_w * slot_ui::BOX_VIEW_SCALE;
+        let small_h = small_h * slot_ui::BOX_VIEW_SCALE;
+        let (page, turn_progress) = match reader.turn {
+            Some((from, to, elapsed)) => {
+                let t = (elapsed / boxview::MANUAL_TURN_SECONDS).clamp(0.0, 1.0);
+                (if t < 0.5 { from } else { to }, Some((from, to, t)))
+            }
+            None => (reader.page, None),
+        };
+        let spread = reader.spread(page);
+        let two = spread[1].is_some();
+        let (width, height) = manual_page_size(canvas, two);
+        let zoom = 1.0 + (reader.zoom - 1.0) * progress;
+        let focus_shift = if two {
+            let margin = ((canvas.w - width * 2.0) / 2.0 - 2.0).max(0.0);
+            reader.focus * (margin + width * 0.5 * (zoom - 1.0))
+        } else { 0.0 };
+        let center_x = canvas.w / 2.0 + (reader.pan[0] + focus_shift) * progress;
+        let center_y = target_y + (LINK_LEGEND_Y / 2.0 - target_y + reader.pan[1]) * progress;
+        let w = small_w + (width * zoom - small_w) * progress;
+        let h = small_h + (height * zoom - small_h) * progress;
+        let left = center_x - if two { w } else { w / 2.0 };
+        let top = center_y - h / 2.0;
+        for (side, index) in spread.into_iter().enumerate() {
+            let Some(index) = index else { continue };
+            let x = left + side as f32 * w;
+            if two && index == reader.page && turn_progress.is_none() && !reader.closing && reader.zoom <= 1.001 {
+                out.push(Draw::Rect { x: x - 2.0, y: top - 2.0, w: w + 4.0, h: h + 4.0,
+                    colour: [0.85, 0.67, 0.30, 1.0] });
+            }
+            let alpha = if reader.closing && reader.page != 0 { progress } else { 1.0 };
+            if let Some(tex) = self.manual_page_texture(index) {
+                out.push(Draw::Tex { x, y: top, w, h, tex, alpha });
+            } else {
+                out.push(Draw::Rect { x, y: top, w, h, colour: [0.85, 0.85, 0.85, alpha] });
+            }
+        }
+        if reader.closing && reader.page != 0 {
+            if let Some(tex) = self.selected_manual_cover() {
+                out.push(Draw::Tex {
+                    x: center_x - w / 2.0, y: top, w, h, tex, alpha: 1.0 - progress,
+                });
+            }
+        }
+        if let Some((from, to, t)) = turn_progress {
+            let turning_page = if t < 0.5 { from } else { to };
+            if let Some(tex) = self.manual_page_texture(turning_page) {
+                let forward = to > from;
+                let fold = (std::f32::consts::PI * t).cos() * if forward { 1.0 } else { -1.0 };
+                let spine = center_x;
+                let edge = spine + w * fold;
+                let lift = h * 0.035 * (std::f32::consts::PI * t).sin();
+                let (x0, x1) = (spine.min(edge), spine.max(edge));
+                out.push(Draw::Quad {
+                    corners: [[x0, top], [x1, top - lift], [x1, top + h + lift], [x0, top + h]],
+                    tex, uv: [0.0, 0.0, 1.0, 1.0], alpha: 1.0,
+                });
+            }
         }
     }
 
@@ -6084,7 +6296,7 @@ impl App {
                     slot_ui::draw_slot_front(self.canvas(), self.slot_faces, bar_alpha, out);
                     if self.core_picker_shown().is_none() {
                         let legends = &self.open_box_legends[usize::from(self.light())];
-                        if legends.len() == 5 {
+                        if legends.len() >= 5 {
                             match self.box_scene {
                                 BoxScene::Opening { .. } | BoxScene::Open { item: BoxItem::Cartridge } =>
                                     self.draw_spread_legends(&[legends[1], legends[2]], LINK_LEGEND_Y, bar_alpha, out),
@@ -6092,8 +6304,19 @@ impl App {
                                     let left = if self.box_zoom > 1.001 { legends[4] } else { legends[1] };
                                     self.draw_spread_legends(&[left, legends[3]], LINK_LEGEND_Y, bar_alpha, out);
                                 }
-                                BoxScene::Open { item: BoxItem::Manual } =>
-                                    self.draw_spread_legends(&[legends[1]], LINK_LEGEND_Y, bar_alpha, out),
+                                BoxScene::Open { item: BoxItem::Manual } => {
+                                    if let Some(reader) = &self.manual_reader {
+                                        let back = if reader.zoom > 1.001 { legends[4] }
+                                            else if legends.len() >= 8 { legends[6] } else { legends[0] };
+                                        let page = if reader.zoom > 1.001 && legends.len() >= 9 { legends[8] }
+                                            else if legends.len() >= 8 { legends[7] } else { legends[1] };
+                                        self.draw_spread_legends(&[back, page], LINK_LEGEND_Y, bar_alpha, out);
+                                    } else if legends.len() >= 8 {
+                                        self.draw_spread_legends(&[legends[1], legends[5]], LINK_LEGEND_Y, bar_alpha, out);
+                                    } else {
+                                        self.draw_spread_legends(&[legends[1]], LINK_LEGEND_Y, bar_alpha, out);
+                                    }
+                                }
                                 BoxScene::PreparingClose { .. } | BoxScene::Closing { .. } => {
                                     let action = if self.box_focus > BOX_FOCUS_BOX_MOVE { legends[3] } else { legends[2] };
                                     self.draw_spread_legends(&[legends[1], action], LINK_LEGEND_Y, bar_alpha, out);

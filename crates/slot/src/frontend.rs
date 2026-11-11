@@ -646,6 +646,10 @@ impl Frontend {
                 (slot_ui::StudioGlyph::A, "Play", false),
                 (slot_ui::StudioGlyph::A, "Flip", false),
                 (slot_ui::StudioGlyph::B, "Reset zoom", true),
+                (slot_ui::StudioGlyph::A, "Read", false),
+                (slot_ui::StudioGlyph::B, "Put down", true),
+                (slot_ui::StudioGlyph::LeftRight, "Pages", false),
+                (slot_ui::StudioGlyph::LeftRight, "Pan", false),
             ]
             .into_iter()
             .map(|(glyph, word, left)| {

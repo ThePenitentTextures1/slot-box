@@ -13,6 +13,7 @@ pub enum Toast {
     GameReset,
     ShotCaptured,
     ShotFailed,
+    ManualPageFailed,
     NeedsGpsp,
     NeedsMgba,
     NoLink,
@@ -39,12 +40,13 @@ pub enum Toast {
 }
 
 impl Toast {
-    const FIXED: [Toast; 26] = [
+    const FIXED: [Toast; 27] = [
         Toast::StateSaved,
         Toast::StateLoaded,
         Toast::GameReset,
         Toast::ShotCaptured,
         Toast::ShotFailed,
+        Toast::ManualPageFailed,
         Toast::NeedsGpsp,
         Toast::NeedsMgba,
         Toast::NoLink,
@@ -90,7 +92,7 @@ impl Toast {
 
     pub fn icon(self) -> Option<Icon> {
         match self {
-            Toast::Duplicate(_) | Toast::ShotFailed => Some(Icon::Alert),
+            Toast::Duplicate(_) | Toast::ShotFailed | Toast::ManualPageFailed => Some(Icon::Alert),
             Toast::ShotCaptured => Some(Icon::Camera),
             _ => None,
         }
@@ -137,6 +139,7 @@ impl Toast {
             Toast::GameReset => "Game Reset",
             Toast::ShotCaptured => "Screenshot Captured",
             Toast::ShotFailed => "Screenshot Failed",
+            Toast::ManualPageFailed => "Manual page failed to load",
             Toast::NeedsGpsp => "Please switch to gpSP",
             Toast::NeedsMgba => "Please switch to mGBA",
             Toast::NoLink => "No link support",

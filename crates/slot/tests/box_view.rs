@@ -836,6 +836,7 @@ fn manual_cover_extracts_to_scale_and_can_be_selected_and_put_down() {
     let cart = app.manual_cover_want().unwrap();
     let manual = TexId::from_raw(9000);
     app.set_manual_cover(Some((cart, manual)));
+    app.set_manual_page_count(1);
     assert!(face(&app, manual).is_none());
     app.apply(Action::GbaDown(Btn::A));
     app.apply(Action::GbaUp(Btn::A));
@@ -862,6 +863,8 @@ fn manual_cover_extracts_to_scale_and_can_be_selected_and_put_down() {
     common::through(&mut app, Btn::A);
     app.update(0.6);
     assert!(matches!(app.phase(), Phase::Shelf), "manual selection must not launch the game");
+    common::through(&mut app, Btn::B);
+    app.update(0.31);
     app.apply(Action::GbaDown(Btn::Down));
     app.update(1.0);
     equal_pose(picked_cart, face(&app, TexId::from_raw(2000)).unwrap());
@@ -873,6 +876,100 @@ fn manual_cover_extracts_to_scale_and_can_be_selected_and_put_down() {
     assert!(cart[3][1] < box_face[0][1]);
     let manual_face = face(&app, manual).unwrap();
     assert!(manual_face[3][1] < cart[0][1], "the manual stays above the cartridge when the box is selected");
+}
+
+#[test]
+fn manual_selection_takes_280ms_and_reader_pickup_starts_at_cover() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    let mut app = setup(root.path());
+    let cover = TexId::from_raw(9000);
+    app.set_manual_cover(Some((app.manual_cover_want().unwrap(), cover)));
+    app.set_manual_page_count(4);
+    open(&mut app);
+    app.apply(Action::GbaDown(Btn::Up));
+    app.update(0.279);
+    let before = face(&app, cover).unwrap();
+    app.update(0.0011);
+    let selected = face(&app, cover).unwrap();
+    assert!(selected[0][1] > before[0][1]);
+    app.update(0.1);
+    equal_pose(selected, face(&app, cover).unwrap());
+    common::through(&mut app, Btn::A);
+    equal_pose(selected, face(&app, cover).unwrap());
+    app.update(0.15);
+    assert!(face(&app, cover).unwrap()[1][0] - face(&app, cover).unwrap()[0][0]
+        > selected[1][0] - selected[0][0]);
+    app.update(0.15);
+    assert!(matches!(app.phase(), Phase::Shelf));
+}
+
+#[test]
+fn manual_reads_pages_turns_zoom_pans_and_puts_down() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    let mut state = slot_store::read_slot_state(root.path());
+    state.left_stick_dpad = false;
+    slot_store::write_slot_state(root.path(), &state).unwrap();
+    let mut app = setup(root.path());
+    let cover = TexId::from_raw(9000);
+    let pages: Vec<_> = (1..6).map(|i| (i, TexId::from_raw(9000 + i))).collect();
+    app.set_manual_cover(Some((app.manual_cover_want().unwrap(), cover)));
+    app.set_manual_page_count(6);
+    app.set_manual_page_textures(pages.clone());
+    app.set_left_stick(true);
+    assert!(!app.left_stick_dpad());
+    open(&mut app);
+    common::through(&mut app, Btn::Up);
+    app.update(0.28);
+    common::through(&mut app, Btn::A);
+    app.update(0.30);
+    assert!(face(&app, cover).is_some());
+
+    common::through(&mut app, Btn::Right);
+    app.update(0.1);
+    assert!(frame(&app).iter().any(|d| matches!(d, Draw::Quad { tex, .. } if *tex == cover)));
+    app.update(0.21);
+    assert!(face(&app, pages[0].1).is_some());
+    assert!(face(&app, pages[1].1).is_some());
+    let left_focus = face(&app, pages[0].1).unwrap();
+    common::through(&mut app, Btn::Right);
+    assert!(!frame(&app).iter().any(|d| matches!(d, Draw::Quad { tex, .. } if *tex == pages[1].1)));
+    app.update(0.2);
+    assert!(face(&app, pages[0].1).unwrap()[0][0] < left_focus[0][0]);
+    common::through(&mut app, Btn::Right);
+    app.update(0.31);
+    assert!(face(&app, pages[2].1).is_some());
+    assert!(face(&app, pages[3].1).is_some());
+    common::through(&mut app, Btn::Right);
+    common::through(&mut app, Btn::Right);
+    app.update(0.31);
+    assert!(face(&app, pages[4].1).is_some());
+    common::through(&mut app, Btn::Right);
+    assert!(face(&app, pages[4].1).is_some());
+    common::through(&mut app, Btn::Left);
+    app.update(0.31);
+    assert!(face(&app, pages[3].1).is_some());
+
+    app.apply(Action::GbaDown(Btn::R1));
+    app.update(1.0);
+    app.apply(Action::GbaUp(Btn::R1));
+    assert!(app.left_stick_dpad());
+    let zoomed = face(&app, pages[3].1).unwrap();
+    app.apply(Action::GbaDown(Btn::Left));
+    app.update(0.2);
+    app.apply(Action::GbaUp(Btn::Left));
+    assert!(face(&app, pages[3].1).unwrap()[0][0] > zoomed[0][0]);
+    common::through(&mut app, Btn::B);
+    app.update(1.0);
+    assert!(!app.left_stick_dpad());
+    assert!(face(&app, pages[3].1).is_some(), "zoomed direction must not turn pages");
+    common::through(&mut app, Btn::B);
+    app.update(0.31);
+    let down = face(&app, cover).unwrap();
+    assert!(down[1][0] - down[0][0] < zoomed[1][0] - zoomed[0][0]);
+    common::through(&mut app, Btn::Down);
+    app.update(0.28);
+    common::through(&mut app, Btn::A);
+    assert!(matches!(app.phase(), Phase::Inserting { .. }));
 }
 
 #[test]
