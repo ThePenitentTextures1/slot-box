@@ -11,6 +11,8 @@ hide:
 
 <kbd>Left</kbd> and <kbd>Right</kbd> to flip through games.<br><kbd>L1</kbd> and <kbd>R1</kbd> to switch platforms.
 
+The cartridge controls below apply to Cartridge View and to the cartridge inside an open box in Box View.
+
 ### Favorites { #favorites data-clip="favorites.mp4" }
 
 Press <kbd>Y</kbd> to heart the cart you're on.<br>Press <kbd>Y</kbd> again to remove.

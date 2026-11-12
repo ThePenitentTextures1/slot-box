@@ -58,6 +58,7 @@ fn quads(out: &[Draw]) -> Vec<Quad> {
             | Draw::Shot { .. }
             | Draw::Capture
             | Draw::Quad { .. }
+            | Draw::PerspectiveQuad { .. }
             | Draw::Paper { .. } => Quad {
                 x: 0.0,
                 y: 0.0,

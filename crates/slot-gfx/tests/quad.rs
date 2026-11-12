@@ -1,4 +1,11 @@
-use slot_gfx::{Compositor, Draw, HeadlessSurface, OUT_H, OUT_W};
+#[cfg(target_os = "macos")]
+use slot_gfx::HeadlessSurface;
+use slot_gfx::{Compositor, Draw, OUT_H, OUT_W};
+#[cfg(target_os = "linux")]
+#[path = "support/headless_linux.rs"]
+mod headless_linux;
+#[cfg(target_os = "linux")]
+use headless_linux::HeadlessSurface;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 static GL: Mutex<()> = Mutex::new(());
@@ -163,4 +170,45 @@ fn quad_alpha_blends_and_a_rect_after_it_still_lands_flat() {
     let [r, _, _] = px(&frame, 150, 150);
     assert!((120..=136).contains(&r), "{r}");
     assert_eq!(px(&frame, 320, 320), [0, 255, 0]);
+}
+
+#[test]
+fn perspective_quad_corrects_texture_mapping_and_resets_for_flat_quads() {
+    let Some((_g, _s, mut c)) = compositor() else {
+        return;
+    };
+    let pair = c.create_texture_nearest(2, 1, &[0, 255, 0, 255, 0, 0, 255, 255]);
+    c.begin_frame();
+    c.draw_list(&[
+        ground(),
+        Draw::PerspectiveQuad {
+            corners: [
+                [100.0, 100.0],
+                [300.0, 150.0],
+                [300.0, 250.0],
+                [100.0, 300.0],
+            ],
+            depth: [1.0, 2.0, 2.0, 1.0],
+            tex: pair,
+            uv: [0.0, 0.0, 1.0, 1.0],
+            alpha: 1.0,
+        },
+        Draw::Quad {
+            corners: [
+                [400.0, 100.0],
+                [600.0, 100.0],
+                [600.0, 300.0],
+                [400.0, 300.0],
+            ],
+            tex: pair,
+            uv: [0.0, 0.0, 1.0, 1.0],
+            alpha: 1.0,
+        },
+    ]);
+    let frame = c.read_frame();
+    for y in [170, 200, 230] {
+        assert_eq!(px(&frame, 215, y), [0, 255, 0]);
+        assert_eq!(px(&frame, 250, y), [0, 0, 255]);
+        assert_eq!(px(&frame, 515, y), [0, 0, 255]);
+    }
 }

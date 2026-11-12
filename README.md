@@ -1,3 +1,5 @@
+A fork of Slot that adds the option to have the game cartridges stored in their original boxes.
+
 <div align="center">
 
 <img src=".github/resources/banner.png" width="100%" alt="slot. A bespoke, Game Boy-centric frontend for the Anbernic RG SP.">

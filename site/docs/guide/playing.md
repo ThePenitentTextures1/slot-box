@@ -6,6 +6,8 @@ Tap <kbd>A</kbd> on a cart to insert it. If you've played it before, you pick up
 
 Hold <kbd>A</kbd> to start the game fresh. The game will launch without autoloading your save state.
 
+On a boxed game in Box View, tap <kbd>A</kbd> to open the box first. Hold <kbd>A</kbd> to start fresh directly, or press <kbd>START</kbd> to play using Resume on Insert.
+
 If you'd rather always start fresh, turn off Resume on Insert in Settings → Gameplay. Resume on Power On decides the same for the game you powered off in.
 
 To restart a game while you're playing it, bind Reset Game in [Shortcuts](controls.md). Pressed it by mistake? Open the menu and select `Undo Reset` within 30 seconds.
@@ -33,6 +35,7 @@ Tap <kbd>MENU</kbd> while playing. The game pauses behind it.
 GBA games can use [mGBA](https://mgba.io) or [gpSP](https://github.com/libretro/gpsp). Game Boy and Game Boy Color games can use [Gambatte](https://github.com/libretro/gambatte-libretro) or mGBA. Gambatte is the default on new cards.
 
 On the shelf, press <kbd>START</kbd> on a GBA, GBC or GB cart. It opens to show the circuit board with a chip in one of two sockets. <kbd>Left</kbd> puts it on mGBA, <kbd>Right</kbd> on gpSP or gambatte (GB/C Only). <kbd>A</kbd> saves your choice, <kbd>B</kbd> backs out.
+In Box View, open the box first and select its cartridge.
 
 slot remembers the choice per game.
 

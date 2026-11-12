@@ -94,7 +94,8 @@ fn the_rows_run_in_the_order_the_user_chose() {
             "Recents",
             "Game Titles",
             "Kid Mode",
-            "Kid Shelf"
+            "Kid Shelf",
+            "Carousel View"
         ]
     );
     assert_eq!(
@@ -249,7 +250,7 @@ fn a_hidden_row_is_stepped_over_and_takes_no_place() {
     let hidden = [QuickRow::WallpaperTint, QuickRow::DateTime];
     assert_eq!(QuickRow::Wallpaper.down(&hidden), QuickRow::ShelfMode);
     assert_eq!(QuickRow::ShelfMode.up(&hidden), QuickRow::Wallpaper);
-    assert_eq!(QuickRow::Theme.up(&hidden), QuickRow::KidShelf);
+    assert_eq!(QuickRow::Theme.up(&hidden), QuickRow::BoxView);
     assert_eq!(QuickRow::ShelfMode.position(&hidden), 2);
     assert_eq!(QuickRow::Wallpaper.down(&[]), QuickRow::WallpaperTint);
     assert_eq!(QuickRow::ShelfMode.position(&[]), 3);
@@ -322,6 +323,8 @@ fn the_values_read_as_the_menu_prints_them() {
             "Both",
             "Icon",
             "Percentage",
+            "Box View",
+            "Cartridge View",
         ]
     );
     assert_eq!(QuickValue::flag(true), QuickValue::On);

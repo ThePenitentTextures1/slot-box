@@ -1,5 +1,5 @@
 mod art;
-pub use art::{cover, cover_bytes, decode_png_bytes};
+pub use art::{cover, cover_bytes, decode_png16_bytes, decode_png_bytes};
 mod bitmaps;
 pub use bitmaps::{
     link_port, link_port_light, slot_back, slot_back_light, slot_front, slot_front_light,
@@ -9,6 +9,7 @@ mod backdrop;
 mod barcode;
 mod battery;
 mod board;
+mod box_rotation;
 #[cfg(feature = "nds")]
 mod box_screen;
 mod cart;
@@ -69,6 +70,7 @@ pub use board::{
     LID_TURN, ROM_H, ROM_W, ROM_X, ROM_Y, SHADOW_H, SHADOW_W, SLIDE_SHARE, SLIDE_UP, SOCKET_H,
     SOCKET_U, SOCKET_V, SOCKET_W, TURN_PAD,
 };
+pub use box_rotation::{box_rotation_width, draw_rotated_box};
 pub use cart::{
     bare_face, cart_backing, cart_box, cart_face, cart_face_with, cart_interior, cart_shadow,
     clean_label, folder_gb_shell, gb_cart_shadow, gb_shell_of, is_clear, label_colour, label_panel,
@@ -137,7 +139,8 @@ pub use rebuild::{headline_face, rebuild_count_face, rebuild_title_face, Rebuild
 pub use receipt::{receipt_blank, receipt_face, ReceiptText};
 pub use refusal::Refusal;
 pub use shelf::{
-    box_size, foot_y, repeat_gap, rest_y, turn_about, Shelf, HEART_INK, HEART_SCALE,
+    box_size, box_view_dimensions, foot_y, loose_cart_dimensions, manual_dimensions, repeat_gap,
+    rest_y, turn_about, BoxFaceTextures, Shelf, BOX_VIEW_SCALE, HEART_INK, HEART_SCALE,
     REPEAT_DELAY_MS,
 };
 pub use shell::{

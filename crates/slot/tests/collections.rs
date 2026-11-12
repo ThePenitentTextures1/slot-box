@@ -78,6 +78,39 @@ fn go_to(a: &mut App, shelf: &str) {
 }
 
 #[test]
+fn box_carousel_preserves_collection_navigation_and_editing() {
+    let d = card();
+    slot_store::write_carousel_view(d.path(), slot_store::CarouselView::Boxes).unwrap();
+    let mut a = boot_with(d.path(), one_favorite());
+    go_to(&mut a, "Favorites");
+    for want in a.box_face_wants() {
+        let id = 1000 + want.index * 4;
+        a.set_box_faces(
+            want.shelf,
+            want.index,
+            Some(slot_ui::BoxFaceTextures {
+                front: slot_ui::TexId::from_raw(id),
+                side: slot_ui::TexId::from_raw(id + 1),
+                back: slot_ui::TexId::from_raw(id + 2),
+                flap: None,
+                front_size: (100, 100),
+                side_size: (20, 100),
+                back_size: (100, 100),
+                japanese: false,
+                pivot: [120.0, 50.0],
+                front_center: [170.0, 50.0],
+            }),
+        );
+    }
+    press(&mut a, Btn::R2);
+    assert_eq!(name(&a).as_deref(), Some("Puzzlers"));
+    press(&mut a, Btn::L2);
+    assert_eq!(name(&a).as_deref(), Some("Favorites"));
+    a.apply(Action::SelectHold);
+    assert!(a.edit().is_some());
+}
+
+#[test]
 fn r2_on_favorites_shows_the_next_collection_and_wraps() {
     let d = card();
     let mut a = boot_with(d.path(), one_favorite());

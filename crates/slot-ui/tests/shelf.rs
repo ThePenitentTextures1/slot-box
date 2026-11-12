@@ -21,6 +21,47 @@ fn shelf_with(n: usize) -> Shelf {
     )
 }
 
+#[test]
+fn moving_collection_items_keeps_box_faces_with_their_games() {
+    let mut shelf = shelf_with(3);
+    let face = |id| slot_ui::BoxFaceTextures {
+        front: TexId::from_raw(id),
+        side: TexId::from_raw(id + 1),
+        back: TexId::from_raw(id + 2),
+        flap: None,
+        front_size: (100, 100),
+        side_size: (20, 100),
+        back_size: (100, 100),
+        japanese: false,
+        pivot: [120.0, 50.0],
+        front_center: [170.0, 50.0],
+    };
+    shelf.set_box_faces(0, Some(face(100)));
+    shelf.set_box_faces(1, None);
+    shelf.set_box_faces(2, Some(face(200)));
+    shelf.carry(1);
+    assert_eq!(shelf.carts[1].stem, "Game 0");
+    assert_eq!(shelf.box_faces(1).unwrap().front, TexId::from_raw(100));
+    assert!(shelf.box_checked(0));
+    shelf.swap_carts(1, 2);
+    assert_eq!(shelf.carts[2].stem, "Game 0");
+    assert_eq!(shelf.box_faces(2).unwrap().front, TexId::from_raw(100));
+    assert_eq!(shelf.box_faces(1).unwrap().front, TexId::from_raw(200));
+}
+
+#[test]
+fn gba_video_boxes_use_art_aspect_ratios_and_japanese_gbc_height() {
+    let mut cart = shelf_with(1).carts.remove(0);
+    cart.platform = Platform::Gbav;
+    let (w, h, depth) = slot_ui::box_view_dimensions(&cart, false);
+    assert!((w / h - 139.0 / 190.0).abs() < 0.00001);
+    assert!((depth / h - 27.0 / 190.0).abs() < 0.00001);
+    assert_eq!((w, h, depth), slot_ui::box_view_dimensions(&cart, true));
+    cart.platform = Platform::Gbc;
+    let (_, gbc_height, _) = slot_ui::box_view_dimensions(&cart, true);
+    assert!((h - gbc_height).abs() < 0.001);
+}
+
 fn placed(s: &Shelf) -> Vec<(f32, f32)> {
     let mut out = Vec::new();
     s.draw_row(Canvas::FRAMED, None, 0.0, 0.0, 1.0, &mut out);
@@ -34,6 +75,7 @@ fn placed(s: &Shelf) -> Vec<(f32, f32)> {
             | Draw::Shot { .. }
             | Draw::Capture
             | Draw::Quad { .. }
+            | Draw::PerspectiveQuad { .. }
             | Draw::Paper { .. } => (0.0, OUT_W as f32),
         })
         .collect()
@@ -45,9 +87,12 @@ fn xw(d: &Draw) -> (f32, f32) {
         | Draw::Tex { x, w, .. }
         | Draw::Part { x, w, .. }
         | Draw::Turned { x, w, .. } => (x, w),
-        Draw::Game | Draw::Shot { .. } | Draw::Capture | Draw::Quad { .. } | Draw::Paper { .. } => {
-            (0.0, OUT_W as f32)
-        }
+        Draw::Game
+        | Draw::Shot { .. }
+        | Draw::Capture
+        | Draw::Quad { .. }
+        | Draw::PerspectiveQuad { .. }
+        | Draw::Paper { .. } => (0.0, OUT_W as f32),
     }
 }
 
@@ -636,6 +681,7 @@ fn cart_spans(out: &[Draw]) -> Vec<(f32, f32)> {
             | Draw::Shot { .. }
             | Draw::Capture
             | Draw::Quad { .. }
+            | Draw::PerspectiveQuad { .. }
             | Draw::Paper { .. } => None,
         })
         .filter(|(x0, x1)| *x1 > 0.0 && *x0 < OUT_W as f32)

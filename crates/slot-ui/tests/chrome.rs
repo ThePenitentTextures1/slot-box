@@ -64,14 +64,17 @@ fn quad(d: &Draw) -> Quad {
         | Draw::Tex { x, y, w, h, .. }
         | Draw::Part { x, y, w, h, .. }
         | Draw::Turned { x, y, w, h, .. } => Quad { x, y, w, h },
-        Draw::Game | Draw::Shot { .. } | Draw::Capture | Draw::Quad { .. } | Draw::Paper { .. } => {
-            Quad {
-                x: 0.0,
-                y: 0.0,
-                w: OUT_W as f32,
-                h: OUT_H as f32,
-            }
-        }
+        Draw::Game
+        | Draw::Shot { .. }
+        | Draw::Capture
+        | Draw::Quad { .. }
+        | Draw::PerspectiveQuad { .. }
+        | Draw::Paper { .. } => Quad {
+            x: 0.0,
+            y: 0.0,
+            w: OUT_W as f32,
+            h: OUT_H as f32,
+        },
     }
 }
 
@@ -114,7 +117,8 @@ fn alpha(d: &Draw) -> f32 {
         Draw::Tex { alpha, .. }
         | Draw::Part { alpha, .. }
         | Draw::Turned { alpha, .. }
-        | Draw::Quad { alpha, .. } => alpha,
+        | Draw::Quad { alpha, .. }
+        | Draw::PerspectiveQuad { alpha, .. } => alpha,
         Draw::Game | Draw::Shot { .. } | Draw::Capture | Draw::Paper { .. } => 1.0,
     }
 }

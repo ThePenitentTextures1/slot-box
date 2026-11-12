@@ -2,6 +2,7 @@ use slot_gfx::{Canvas, Draw, TexId, OUT_H, OUT_W};
 use slot_store::{Cart, Platform};
 
 use crate::board::{board_in, Placed};
+use crate::box_rotation::{box_rotation_width, draw_rotated_box};
 use crate::cart::{cart_box, label_colour, label_rect, label_text, shelf_shape, CART_H, CART_W};
 use crate::hud::Millis;
 use crate::silhouette::GbShell;
@@ -18,6 +19,8 @@ fn edge_fade(canvas: Canvas, x: f32, w: f32) -> f32 {
     let shown = ((x + w).min(canvas.w) - x.max(0.0)).max(0.0) / w;
     ((shown - HIDDEN_BELOW) / (SHOWN_FROM - HIDDEN_BELOW)).clamp(0.0, 1.0)
 }
+pub const BOX_VIEW_SCALE: f32 = 0.45;
+const BOX_PIXELS_PER_MM: f32 = (360.0 / 60.0 + 212.0 / 35.0 + 312.0 / 57.0 + 337.0 / 65.5) / 4.0;
 const SIDE_ALPHA: f32 = 1.0;
 
 pub fn rest_y(canvas: Canvas, h: f32) -> f32 {
@@ -34,6 +37,46 @@ pub fn rest_y(canvas: Canvas, h: f32) -> f32 {
 
 pub fn foot_y(canvas: Canvas, h: f32) -> f32 {
     rest_y(canvas, h) + h
+}
+
+/// Returns physical front width/height and spine width at one shared Box View scale.
+pub fn box_view_dimensions(cart: &Cart, japanese: bool) -> (f32, f32, f32) {
+    #[cfg(feature = "nds")]
+    if cart.platform == Platform::Nds {
+        let (w, h) = cart_box(cart.platform);
+        return (w as f32 / BOX_VIEW_SCALE, h as f32 / BOX_VIEW_SCALE, 0.0);
+    }
+    let (front_width_mm, front_height_mm, depth_mm) = match cart.platform {
+        Platform::Gbav => (124.0 * 139.0 / 190.0, 124.0, 124.0 * 27.0 / 190.0),
+        Platform::Gba if japanese => (90.0, 138.0, 24.0),
+        Platform::Gba => (125.0, 125.0, 24.0),
+        Platform::Gb | Platform::Gbc if japanese => (100.0, 124.0, 22.0),
+        Platform::Gb | Platform::Gbc => (125.0, 125.0, 28.0),
+        #[cfg(feature = "nds")]
+        Platform::Nds => unreachable!("DS uses cartridge presentation"),
+    };
+    (
+        front_width_mm * BOX_PIXELS_PER_MM,
+        front_height_mm * BOX_PIXELS_PER_MM,
+        depth_mm * BOX_PIXELS_PER_MM,
+    )
+}
+
+pub fn loose_cart_dimensions(cart: &Cart) -> (f32, f32) {
+    let (width_mm, height_mm) = match cart.platform {
+        Platform::Gba | Platform::Gbav => (60.0, 35.0),
+        Platform::Gb | Platform::Gbc => (57.0, 65.5),
+        #[cfg(feature = "nds")]
+        Platform::Nds => {
+            let (w, h) = cart_box(cart.platform);
+            return (w as f32 / BOX_VIEW_SCALE, h as f32 / BOX_VIEW_SCALE);
+        }
+    };
+    (width_mm * BOX_PIXELS_PER_MM, height_mm * BOX_PIXELS_PER_MM)
+}
+
+pub fn manual_dimensions() -> (f32, f32) {
+    (115.0 * BOX_PIXELS_PER_MM, 85.0 * BOX_PIXELS_PER_MM)
 }
 
 pub fn box_size(platform: Platform) -> (u32, u32) {
@@ -61,11 +104,31 @@ pub fn repeat_gap(fired: usize) -> Millis {
     REPEAT_MS[fired.min(REPEAT_MS.len() - 1)]
 }
 
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct BoxFaceTextures {
+    pub front: TexId,
+    pub side: TexId,
+    pub back: TexId,
+    pub flap: Option<TexId>,
+    pub front_size: (u32, u32),
+    pub side_size: (u32, u32),
+    pub back_size: (u32, u32),
+    /// Whether the ROM identifies a Japanese release.
+    pub japanese: bool,
+    /// Spine/front seam in the flattened net's pixel coordinates, not the 3D pivot.
+    pub pivot: [f32; 2],
+    /// Front-face center in the flattened net's pixel coordinates.
+    pub front_center: [f32; 2],
+}
+
 pub struct Shelf {
     pub carts: Vec<Cart>,
     pub index: usize,
     pub scroll: f32,
     faces: Vec<Option<TexId>>,
+    box_faces: Vec<Option<BoxFaceTextures>>,
+    box_checked: Vec<bool>,
+    box_view: bool,
     wrapped: Vec<Option<TexId>>,
     interiors: Vec<Option<TexId>>,
     shadow: Option<TexId>,
@@ -86,6 +149,9 @@ impl Shelf {
     pub fn new(carts: Vec<Cart>) -> Self {
         Shelf {
             faces: vec![None; carts.len()],
+            box_faces: vec![None; carts.len()],
+            box_checked: vec![false; carts.len()],
+            box_view: false,
             wrapped: vec![None; carts.len()],
             interiors: vec![None; carts.len()],
             hearted: vec![false; carts.len()],
@@ -136,10 +202,17 @@ impl Shelf {
             .drain(..)
             .chain(self.interiors.drain(..))
             .flatten()
+            .chain(self.box_faces.drain(..).flatten().flat_map(|b| {
+                [Some(b.front), Some(b.side), Some(b.back), b.flap]
+                    .into_iter()
+                    .flatten()
+            }))
             .collect();
         self.faces = faces;
         self.wrapped = wrapped;
         self.interiors = interiors;
+        self.box_faces = vec![None; carts.len()];
+        self.box_checked = vec![false; carts.len()];
         self.hearted = vec![false; carts.len()];
         self.carts = carts;
         self.held = None;
@@ -156,6 +229,7 @@ impl Shelf {
             gb_backing: self.gb_backing,
             gbc_backing: self.gbc_backing,
             heart: self.heart,
+            box_view: self.box_view,
             ..Shelf::new(Vec::new())
         }
     }
@@ -169,6 +243,8 @@ impl Shelf {
         let to = (at as i32 + by).rem_euclid(n as i32) as usize;
         self.carts.swap(at, to);
         self.faces.swap(at, to);
+        self.box_faces.swap(at, to);
+        self.box_checked.swap(at, to);
         self.wrapped.swap(at, to);
         self.interiors.swap(at, to);
         self.hearted.swap(at, to);
@@ -183,6 +259,8 @@ impl Shelf {
         }
         self.carts.swap(at, to);
         self.faces.swap(at, to);
+        self.box_faces.swap(at, to);
+        self.box_checked.swap(at, to);
         self.wrapped.swap(at, to);
         self.interiors.swap(at, to);
         self.hearted.swap(at, to);
@@ -197,6 +275,10 @@ impl Shelf {
         self.scroll = i as f32;
         self.ride = i as f32;
         self.vel = 0.0;
+    }
+
+    pub fn set_box_view(&mut self, enabled: bool) {
+        self.box_view = enabled;
     }
 
     pub fn set_heart(&mut self, face: TexId, w: u32, h: u32) {
@@ -254,6 +336,31 @@ impl Shelf {
         self.faces.get_mut(i).and_then(|f| f.replace(tex))
     }
 
+    pub fn box_faces(&self, i: usize) -> Option<BoxFaceTextures> {
+        self.box_faces.get(i).copied().flatten()
+    }
+
+    pub fn box_checked(&self, i: usize) -> bool {
+        self.box_checked.get(i).copied().unwrap_or(true)
+    }
+
+    pub fn set_box_faces(
+        &mut self,
+        i: usize,
+        faces: Option<BoxFaceTextures>,
+    ) -> Option<BoxFaceTextures> {
+        let checked = self.box_checked.get_mut(i)?;
+        *checked = true;
+        std::mem::replace(self.box_faces.get_mut(i)?, faces)
+    }
+
+    pub fn take_box_faces(&mut self, i: usize) -> Option<BoxFaceTextures> {
+        if let Some(checked) = self.box_checked.get_mut(i) {
+            *checked = false;
+        }
+        self.box_faces.get_mut(i).and_then(Option::take)
+    }
+
     pub fn set_interior(&mut self, i: usize, tex: TexId) -> Option<TexId> {
         self.interiors.get_mut(i).and_then(|f| f.replace(tex))
     }
@@ -268,6 +375,12 @@ impl Shelf {
 
     pub fn on_screen(&self) -> Vec<usize> {
         self.around(SLOTS)
+    }
+
+    pub fn box_visible_radius(canvas: Canvas) -> i32 {
+        // Even the narrowest physical spine is wider than 20 mm.
+        let minimum_pitch = 20.0 * BOX_PIXELS_PER_MM * BOX_VIEW_SCALE * SIDE_SCALE;
+        (canvas.w / 2.0 / minimum_pitch).ceil() as i32 + 2
     }
 
     pub fn around(&self, radius: i32) -> Vec<usize> {
@@ -466,20 +579,61 @@ impl Shelf {
     }
 
     pub fn selected_at(&self, canvas: Canvas) -> (f32, f32) {
-        let (w, _) = self.slot_width(0);
+        if !self.box_view {
+            let (w, _) = self.slot_width(0, self.scroll - self.placed());
+            let scale = shrink(self.placed() - self.scroll);
+            return (self.centre(canvas, 0) - w * scale / 2.0, scale);
+        }
+        // Cartridge insertion and the core picker retain vanilla cartridge geometry even
+        // when the selected shelf item itself is rendered as a box.
+        let width = self
+            .cart_at_offset(0)
+            .map(|i| match self.carts[i].platform {
+                Platform::Gba | Platform::Gbav => CART_W,
+                platform => cart_box(platform).0,
+            })
+            .unwrap_or(CART_W) as f32;
         let scale = shrink(self.placed() - self.scroll);
-        (self.centre(canvas, 0) - w * scale / 2.0, scale)
+        (self.centre(canvas, 0) - width * scale / 2.0, scale)
     }
 
-    fn slot_width(&self, slot: i32) -> (f32, bool) {
-        match self.cart_at_offset(slot).map(|i| self.carts[i].platform) {
-            Some(Platform::Gba | Platform::Gbav) | None => (CART_W as f32, true),
-            Some(p) => (cart_box(p).0 as f32, false),
+    /// Center, scale and rotation of the selected box in the current carousel frame.
+    pub fn selected_box_pose(&self, canvas: Canvas) -> ([f32; 2], f32, f32) {
+        let offset = self.scroll_target() - self.scroll;
+        (
+            [self.centre(canvas, 0), canvas.h / 2.0],
+            BOX_VIEW_SCALE * shrink(offset),
+            offset.abs().min(1.0) * std::f32::consts::FRAC_PI_2,
+        )
+    }
+
+    fn slot_width(&self, slot: i32, u: f32) -> (f32, bool) {
+        let Some(index) = self.cart_at_offset(slot) else {
+            return (CART_W as f32, true);
+        };
+        let cart = &self.carts[index];
+        if self.box_view && !is_ds(cart.platform) {
+            let t = (slot as f32 - u).abs().min(1.0);
+            let width = if let Some(faces) = self.box_faces(index) {
+                box_rotation_width(
+                    box_view_dimensions(cart, faces.japanese),
+                    t * std::f32::consts::FRAC_PI_2,
+                ) * BOX_VIEW_SCALE
+            } else {
+                let full = cart_box(cart.platform).0 as f32;
+                let small = loose_cart_dimensions(cart).0 * BOX_VIEW_SCALE;
+                full + (small - full) * t
+            };
+            return (width, false);
+        }
+        match cart.platform {
+            Platform::Gba | Platform::Gbav => (CART_W as f32, true),
+            p => (cart_box(p).0 as f32, false),
         }
     }
 
     fn pitch(&self, a: i32, u: f32) -> f32 {
-        let ((wa, gba_a), (wb, gba_b)) = (self.slot_width(a), self.slot_width(a + 1));
+        let ((wa, gba_a), (wb, gba_b)) = (self.slot_width(a, u), self.slot_width(a + 1, u));
         let (sa, sb) = (shrink(a as f32 - u), shrink((a + 1) as f32 - u));
         let gap_of = if gba_a || gba_b { CART_W as f32 } else { wa };
         wa * sa / 2.0 + gap_of * (1.0 - (sa + sb) / 2.0) + wb * sb / 2.0
@@ -671,8 +825,13 @@ impl Shelf {
         let recede = recede.clamp(0.0, 1.0);
         let dim = dim.clamp(0.0, 1.0);
         let target = self.placed();
+        let slots = if self.box_view {
+            Self::box_visible_radius(canvas)
+        } else {
+            SLOTS
+        };
         let front = shift(self.index) != (0.0, 0.0, 1.0);
-        let order = (-SLOTS..=SLOTS)
+        let order = (-slots..=slots)
             .filter(|&s| !front || s != 0)
             .chain(front.then_some(0));
         for slot in order {
@@ -689,7 +848,27 @@ impl Shelf {
             let scale = shrink(offset) * grow;
             let mut alpha = (1.0 + (SIDE_ALPHA - 1.0) * t) * (1.0 - recede);
             let (cw, ch) = cart_box(cart.platform);
-            let (w, h) = (cw as f32 * scale, ch as f32 * scale);
+            let box_faces = if self.box_view {
+                self.box_faces(i)
+            } else {
+                None
+            };
+            let (w, h) = if let Some(faces) = box_faces {
+                let dimensions = box_view_dimensions(cart, faces.japanese);
+                let angle = t * std::f32::consts::FRAC_PI_2;
+                (
+                    box_rotation_width(dimensions, angle) * BOX_VIEW_SCALE * scale,
+                    dimensions.1 * BOX_VIEW_SCALE * scale,
+                )
+            } else if self.box_view && !is_ds(cart.platform) {
+                let (width, height) = loose_cart_dimensions(cart);
+                (
+                    (cw as f32 + (width * BOX_VIEW_SCALE - cw as f32) * t) * scale,
+                    (ch as f32 + (height * BOX_VIEW_SCALE - ch as f32) * t) * scale,
+                )
+            } else {
+                (cw as f32 * scale, ch as f32 * scale)
+            };
             let away = offset.signum() * (1.0 + offset.abs());
             let u = self.scroll - self.placed();
             let step = match dx < 0.0 {
@@ -704,7 +883,11 @@ impl Shelf {
                 continue;
             }
             let x = x + shake;
-            let y = foot_y(canvas, ch as f32) - h + dy;
+            let y = if box_faces.is_some() {
+                (canvas.h - h) / 2.0
+            } else {
+                foot_y(canvas, ch as f32) - h
+            } + dy;
             let start = out.len();
             let deg = turn(i);
             let centre = [x + w / 2.0, y + h / 2.0];
@@ -721,6 +904,39 @@ impl Shelf {
                 });
                 turn_about(&mut out[start..], centre, deg);
                 continue;
+            }
+            if let Some(box_faces) = box_faces {
+                if box_faces.front_size.0 > 0
+                    && box_faces.front_size.1 > 0
+                    && box_faces.side_size.0 > 0
+                    && box_faces.side_size.1 > 0
+                {
+                    let (front_w, front_h, depth) = box_view_dimensions(cart, box_faces.japanese);
+                    let s = BOX_VIEW_SCALE * scale;
+                    draw_rotated_box(
+                        box_faces,
+                        (front_w * s, front_h * s, depth * s),
+                        t * std::f32::consts::FRAC_PI_2,
+                        centre,
+                        alpha * dim,
+                        out,
+                    );
+                    if let (Some(true), Some((tex, sw, sh))) = (self.hearted.get(i), self.heart) {
+                        let opacity = alpha * dim * (1.0 - t);
+                        if opacity > 0.0 {
+                            out.push(Draw::Tex {
+                                x: (x + w - sw - HEART_INSET).round(),
+                                y: (y + HEART_INSET).round(),
+                                w: sw,
+                                h: sh,
+                                tex,
+                                alpha: opacity,
+                            });
+                        }
+                    }
+                    turn_about(&mut out[start..], centre, deg);
+                    continue;
+                }
             }
             if alpha < 1.0 && !is_ds(cart.platform) {
                 let backing = match self.shell(i) {

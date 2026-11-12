@@ -49,6 +49,9 @@ pub struct Frontend {
     title_tex: Option<TexId>,
     faces: FaceBuilder,
     cart_faces: CartFaces,
+    box_faces: crate::box_faces::BoxFaces,
+    manual_covers: crate::manual_covers::ManualCovers,
+    _manual_resize: crate::manual_resize::Worker,
     rebuild: Option<Rebuild>,
     stale_check: Option<std::sync::mpsc::Receiver<Vec<slot_store::Cart>>>,
     ui_faces: Option<std::sync::mpsc::Receiver<UiFaces>>,
@@ -565,6 +568,9 @@ impl Frontend {
     pub fn boot_with(platform: Box<dyn Platform>, sink: Box<dyn crate::audio::AudioSink>) -> Self {
         let now = Instant::now();
         let cart_faces = CartFaces::spawn(platform.root().to_path_buf());
+        let box_faces = crate::box_faces::BoxFaces::spawn(platform.root().to_path_buf());
+        let manual_covers =
+            crate::manual_covers::ManualCovers::spawn(platform.root().to_path_buf());
         save_headers_when_changed(platform.root().to_path_buf());
         let lid_root = platform.root().to_path_buf();
         let mut session = Session::boot_with(platform.root().to_path_buf(), sink);
@@ -595,6 +601,10 @@ impl Frontend {
         crate::boot_time::mark("session");
         let stale_check =
             Self::check_labels(platform.root(), session.app().carts().cloned().collect());
+        let manual_resize = crate::manual_resize::Worker::start(
+            platform.root().to_path_buf(),
+            session.app().carts().cloned().collect(),
+        );
         session
             .app_mut()
             .set_power(Power::new(platform, DOZE_TIMEOUT));
@@ -609,6 +619,9 @@ impl Frontend {
             title_tex: None,
             faces: FaceBuilder::spawn(lid_root),
             cart_faces,
+            box_faces,
+            manual_covers,
+            _manual_resize: manual_resize,
             rebuild: None,
             stale_check,
             ui_faces: None,
@@ -677,6 +690,8 @@ impl Frontend {
         crate::boot_time::mark("paper");
         if self.rebuild.is_none() {
             self.cart_faces.sync(self.session.app_mut(), compositor);
+            self.box_faces.sync(self.session.app_mut(), compositor);
+            self.manual_covers.sync(self.session.app_mut(), compositor);
         }
         crate::boot_time::mark("cart faces");
         let (tx, rx) = std::sync::mpsc::channel();
@@ -702,6 +717,31 @@ impl Frontend {
         self.session.app_mut().set_alert_face(alert);
         let legend = legend_faces(compositor, &LEGEND);
         self.session.app_mut().set_legend_faces(legend);
+        let open_box_legends = [false, true].map(|light| {
+            [
+                (slot_ui::StudioGlyph::B, "Close", true),
+                (slot_ui::StudioGlyph::UpDown, "Select", true),
+                (slot_ui::StudioGlyph::A, "Play", false),
+                (slot_ui::StudioGlyph::A, "Flip", false),
+                (slot_ui::StudioGlyph::B, "Reset zoom", true),
+                (slot_ui::StudioGlyph::A, "Read", false),
+                (slot_ui::StudioGlyph::B, "Put down", true),
+                (slot_ui::StudioGlyph::LeftRight, "Pages", false),
+                (slot_ui::StudioGlyph::LeftRight, "Pan", false),
+            ]
+            .into_iter()
+            .map(|(glyph, word, left)| {
+                let face = slot_ui::studio_legend(glyph, word, footer_ink(light), left);
+                (
+                    compositor.create_texture(face.w, face.h, &face.rgba),
+                    face.w,
+                )
+            })
+            .collect()
+        });
+        self.session
+            .app_mut()
+            .set_open_box_legends(open_box_legends);
         let shot_hints = slot_ui::SHOT_HINTS
             .iter()
             .map(|&(key, label)| {
@@ -1213,6 +1253,8 @@ impl Frontend {
             crate::latency::taken();
         }
         self.cart_faces.sync(self.session.app_mut(), compositor);
+        self.box_faces.sync(self.session.app_mut(), compositor);
+        self.manual_covers.sync(self.session.app_mut(), compositor);
         sync_clock(self.session.app_mut(), compositor, &mut self.clocks);
         sync_box_art(self.session.app_mut(), compositor, &mut self.box_art);
         sync_binding_faces(self.session.app_mut(), compositor);

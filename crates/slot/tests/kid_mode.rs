@@ -122,6 +122,34 @@ fn a_kid_mode_card_boots_locked() {
 }
 
 #[test]
+fn boxed_games_remain_playable_when_kid_mode_disallows_closing_a_box() {
+    let d = card();
+    slot_store::write_carousel_view(d.path(), slot_store::CarouselView::Boxes).unwrap();
+    let (mut a, _clock) = boot_on(&d, kid(KidMode::OneShelf));
+    for want in a.box_face_wants() {
+        a.set_box_faces(
+            want.shelf,
+            want.index,
+            Some(slot_ui::BoxFaceTextures {
+                front: slot_ui::TexId::from_raw(1000),
+                side: slot_ui::TexId::from_raw(1001),
+                back: slot_ui::TexId::from_raw(1002),
+                flap: None,
+                front_size: (100, 100),
+                side_size: (20, 100),
+                back_size: (100, 100),
+                japanese: false,
+                pivot: [120.0, 50.0],
+                front_center: [170.0, 50.0],
+            }),
+        );
+    }
+    press(&mut a, Btn::A);
+    assert!(matches!(a.phase(), Phase::Inserting { .. }));
+    assert!(!a.starting_clean());
+}
+
+#[test]
 fn unlocked_steps_between_modes_without_asking() {
     let d = card();
     let (mut a, _clock) = boot_on(&d, kid(KidMode::OneShelf));
