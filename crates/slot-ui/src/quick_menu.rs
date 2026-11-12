@@ -665,7 +665,7 @@ impl QuickRow {
             QuickRow::Wallpaper => "Wallpaper",
             QuickRow::Recents => "Recents",
             QuickRow::ShowTitles => "Game Titles",
-            QuickRow::BoxView => "Box View",
+            QuickRow::BoxView => "Carousel View",
             QuickRow::WallpaperTint => "Wallpaper Tint",
             QuickRow::Resume => "Resume",
             QuickRow::UndoSave => "Undo Save",
@@ -923,10 +923,12 @@ pub enum QuickValue {
     Ghosting,
     Https,
     Http,
+    BoxView,
+    CartridgeView,
 }
 
 impl QuickValue {
-    pub const ALL: [QuickValue; 50] = [
+    pub const ALL: [QuickValue; 52] = [
         QuickValue::Speed1_5,
         QuickValue::Speed2,
         QuickValue::Speed3,
@@ -977,6 +979,8 @@ impl QuickValue {
         QuickValue::Ghosting,
         QuickValue::Https,
         QuickValue::Http,
+        QuickValue::BoxView,
+        QuickValue::CartridgeView,
     ];
 
     pub const LEVELS: [QuickValue; 16] = [
@@ -1063,6 +1067,8 @@ impl QuickValue {
             QuickValue::Ghosting => "Ghosting",
             QuickValue::Https => "HTTPS",
             QuickValue::Http => "HTTP",
+            QuickValue::BoxView => "Box View",
+            QuickValue::CartridgeView => "Cartridge View",
         }
     }
 

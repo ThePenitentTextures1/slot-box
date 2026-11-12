@@ -14,7 +14,7 @@ pub struct BoxPose {
 pub enum Scene {
     Carousel, FlippingBack { started: Millis, from: BoxPose }, Back { zoom:f32, pan:[f32;2] },
     FlippingFront { started:Millis, from: BoxPose }, Opening { started:Millis },
-    QuickOpening { started:Millis },
+    QuickOpening { started:Millis }, QuickLaunched, QuickClosing { started:Millis },
     Open { item:Item }, PreparingClose { started: Millis, angle: f32 }, Closing { started:Millis },
 }
 pub type BoxItem=Item;

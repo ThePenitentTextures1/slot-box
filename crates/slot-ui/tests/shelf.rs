@@ -21,6 +21,19 @@ fn shelf_with(n: usize) -> Shelf {
     )
 }
 
+#[test]
+fn gba_video_boxes_use_art_aspect_ratios_and_japanese_gbc_height() {
+    let mut cart = shelf_with(1).carts.remove(0);
+    cart.platform = Platform::Gbav;
+    let (w, h, depth) = slot_ui::box_view_dimensions(&cart, false);
+    assert!((w / h - 139.0 / 190.0).abs() < 0.00001);
+    assert!((depth / h - 27.0 / 190.0).abs() < 0.00001);
+    assert_eq!((w, h, depth), slot_ui::box_view_dimensions(&cart, true));
+    cart.platform = Platform::Gbc;
+    let (_, gbc_height, _) = slot_ui::box_view_dimensions(&cart, true);
+    assert!((h - gbc_height).abs() < 0.001);
+}
+
 fn placed(s: &Shelf) -> Vec<(f32, f32)> {
     let mut out = Vec::new();
     s.draw_row(Canvas::FRAMED, None, 0.0, 0.0, 1.0, &mut out);

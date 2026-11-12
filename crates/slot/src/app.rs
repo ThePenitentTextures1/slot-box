@@ -1759,8 +1759,8 @@ impl App {
                 QuickValue::Hide
             }),
             QuickRow::BoxView => Some(match self.carousel_view {
-                CarouselView::Boxes => QuickValue::On,
-                CarouselView::Cartridges => QuickValue::Off,
+                CarouselView::Boxes => QuickValue::BoxView,
+                CarouselView::Cartridges => QuickValue::CartridgeView,
             }),
             QuickRow::WallpaperTint => Some(match self.state.wallpaper_tint {
                 WallpaperTint::Off => QuickValue::Off,
@@ -2521,7 +2521,7 @@ impl App {
             return;
         }
         if matches!(self.box_scene, BoxScene::QuickOpening { started } if now.saturating_sub(started) >= BOX_BAR_FADE_MS + BOX_OPEN_MS) {
-            self.box_scene = BoxScene::Open { item: BoxItem::Cartridge };
+            self.box_scene = BoxScene::QuickLaunched;
             self.insert(self.box_quick_clean);
             return;
         }
@@ -2553,6 +2553,11 @@ impl App {
             }
             BoxScene::Closing { started }
                 if now.saturating_sub(started) >= BOX_CLOSE_MS + BOX_BAR_FADE_MS =>
+            {
+                BoxScene::Carousel
+            }
+            BoxScene::QuickClosing { started }
+                if now.saturating_sub(started) >= BOX_OPEN_MS + BOX_BAR_FADE_MS =>
             {
                 BoxScene::Carousel
             }
@@ -2755,6 +2760,8 @@ impl App {
                 | BoxScene::FlippingFront { .. }
                 | BoxScene::Opening { .. }
                 | BoxScene::QuickOpening { .. }
+                | BoxScene::QuickLaunched
+                | BoxScene::QuickClosing { .. }
                 | BoxScene::PreparingClose { .. }
                 | BoxScene::Closing { .. }
         ) {
@@ -5294,6 +5301,9 @@ impl App {
             });
         }
         if let Some(phase) = next {
+            if matches!(phase, Phase::Shelf) && matches!(self.box_scene, BoxScene::QuickLaunched) {
+                self.box_scene = BoxScene::QuickClosing { started: self.now() };
+            }
             self.phase = phase;
             self.refused_from = None;
             let seated = match &self.phase {
@@ -5917,7 +5927,12 @@ impl App {
                 let t = (now.saturating_sub(started) as f32 / BOX_CLOSE_MS as f32).clamp(0.0, 1.0);
                 self.draw_open_box(1.0 - t, out);
             }
+            BoxScene::QuickClosing { started } => {
+                let t = (now.saturating_sub(started) as f32 / BOX_OPEN_MS as f32).clamp(0.0, 1.0);
+                self.draw_open_box(1.0 - t, out);
+            }
             BoxScene::Open { .. } | BoxScene::PreparingClose { .. } => self.draw_open_box(1.0, out),
+            BoxScene::QuickLaunched => self.draw_open_box(1.0, out),
             BoxScene::Carousel => return false,
         }
         true
@@ -5954,7 +5969,7 @@ impl App {
         let manual_shift = (12.0 + (manual_h + small_h) / 2.0)
             * smooth(-self.box_focus) * p;
         let box_y = parked_y + (selected_y - parked_y) * smooth((self.box_focus - BOX_FOCUS_BOX_MOVE) / (1.0 - BOX_FOCUS_BOX_MOVE)) + manual_shift;
-        let origin = if matches!(self.box_scene, BoxScene::Closing { .. }) {
+        let origin = if matches!(self.box_scene, BoxScene::Closing { .. } | BoxScene::QuickClosing { .. }) {
             let (center, scale, angle) = self.shelf().selected_box_pose(canvas);
             boxview::BoxPose { center, scale, angle }
         } else {
@@ -6023,14 +6038,14 @@ impl App {
             );
         };
         let box_behind_cart = match self.box_scene {
-            BoxScene::Opening { .. } | BoxScene::QuickOpening { .. } => ms >= 1500.0,
+            BoxScene::Opening { .. } | BoxScene::QuickOpening { .. } | BoxScene::QuickClosing { .. } => ms >= 1500.0,
             BoxScene::Open { .. } => self.box_focus <= BOX_FOCUS_BOX_MOVE,
             _ => false,
         };
         if box_behind_cart {
             draw_box(out);
         }
-        if extraction > 0.0 && !matches!(self.box_scene, BoxScene::QuickOpening { .. }) {
+        if extraction > 0.0 && !matches!(self.box_scene, BoxScene::QuickOpening { .. } | BoxScene::QuickLaunched | BoxScene::QuickClosing { .. }) {
             if let Some(tex) = self.selected_manual_cover().filter(|_| {
                 self.manual_reader.is_none() || self.box_focus > -0.999
             }) {
@@ -6147,7 +6162,7 @@ impl App {
         };
         let canvas = self.canvas();
         let scale = slot_ui::BOX_VIEW_SCALE;
-        if !matches!(self.box_scene, BoxScene::QuickOpening { .. }) {
+        if !matches!(self.box_scene, BoxScene::QuickOpening { .. } | BoxScene::QuickLaunched | BoxScene::QuickClosing { .. }) {
             if let Some(tex) = self.selected_manual_cover() {
                 let (mw, mh) = slot_ui::manual_dimensions();
                 let (mw, mh) = (mw * scale, mh * scale);
@@ -6344,8 +6359,10 @@ impl App {
                         (1.0 - self.now().saturating_sub(started) as f32 / BOX_FLIP_MS as f32).clamp(0.0, 1.0),
                     BoxScene::Closing { started } =>
                         (1.0 - self.now().saturating_sub(started + BOX_CLOSE_MS) as f32 / BOX_BAR_FADE_MS as f32).clamp(0.0, 1.0),
+                    BoxScene::QuickClosing { started } =>
+                        (1.0 - self.now().saturating_sub(started + BOX_OPEN_MS) as f32 / BOX_BAR_FADE_MS as f32).clamp(0.0, 1.0),
                     BoxScene::Open { .. } | BoxScene::Back { .. } | BoxScene::PreparingClose { .. } => 1.0,
-                    BoxScene::Carousel => 0.0,
+                    BoxScene::Carousel | BoxScene::QuickLaunched => 0.0,
                 };
                 if bar_alpha > 0.0 {
                     if self.plugged_face.is_some() {

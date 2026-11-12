@@ -31,8 +31,9 @@ pub fn foot_y(h: f32) -> f32 {
 /// Returns physical front width/height and spine width at one shared Box View scale.
 pub fn box_view_dimensions(cart: &Cart, japanese: bool) -> (f32, f32, f32) {
     let (front_width_mm, front_height_mm, depth_mm) = match cart.platform {
-        Platform::Gba | Platform::Gbav if japanese => (90.0, 138.0, 24.0),
-        Platform::Gba | Platform::Gbav => (125.0, 125.0, 24.0),
+        Platform::Gbav => (124.0 * 139.0 / 190.0, 124.0, 124.0 * 27.0 / 190.0),
+        Platform::Gba if japanese => (90.0, 138.0, 24.0),
+        Platform::Gba => (125.0, 125.0, 24.0),
         Platform::Gb | Platform::Gbc if japanese => (100.0, 124.0, 22.0),
         Platform::Gb | Platform::Gbc => (125.0, 125.0, 28.0),
     };

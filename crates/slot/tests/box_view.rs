@@ -3,7 +3,7 @@ mod common;
 use slot::app::{App, Phase};
 use slot_input::{Action, Btn};
 use slot_store::{write_carousel_view, CarouselView};
-use slot_ui::{BoxFaceTextures, Draw, TexId};
+use slot_ui::{BoxFaceTextures, Draw, QuickRow, QuickValue, TexId};
 
 fn textures(id: usize) -> BoxFaceTextures {
     BoxFaceTextures {
@@ -61,6 +61,38 @@ fn equal_pose(a: [[f32; 2]; 4], b: [[f32; 2]; 4]) {
         assert!((a[0] - b[0]).abs() < 0.001, "{a:?} != {b:?}");
         assert!((a[1] - b[1]).abs() < 0.001, "{a:?} != {b:?}");
     }
+}
+
+#[test]
+fn carousel_view_setting_names_choices_and_persists_existing_keys() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    let mut app = common::boot(root.path());
+    assert_eq!(QuickRow::BoxView.label(), "Carousel View");
+    assert_eq!(app.quick_value(QuickRow::BoxView), Some(QuickValue::CartridgeView));
+    assert_eq!(QuickValue::CartridgeView.text(), "Cartridge View");
+    assert_eq!(QuickValue::BoxView.text(), "Box View");
+    app.apply(Action::QuickMenu);
+    let mut path = vec![QuickRow::BoxView];
+    while let Some(parent) = path.last().and_then(|row| row.parent()) {
+        path.push(parent);
+    }
+    for (depth, row) in path.iter().rev().enumerate() {
+        if depth > 0 {
+            common::through(&mut app, Btn::A);
+        }
+        for _ in 0..row.position(&app.hidden_rows()) {
+            common::through(&mut app, Btn::Down);
+        }
+    }
+    assert_eq!(app.quick_menu(), Some(QuickRow::BoxView));
+    common::through(&mut app, Btn::Right);
+    assert_eq!(app.quick_value(QuickRow::BoxView), Some(QuickValue::BoxView));
+    assert_eq!(std::fs::read_to_string(root.path().join("Config/carousel_view.txt")).unwrap().trim(), "boxes");
+    assert_eq!(common::boot(root.path()).quick_value(QuickRow::BoxView), Some(QuickValue::BoxView));
+    common::through(&mut app, Btn::Left);
+    assert_eq!(app.quick_value(QuickRow::BoxView), Some(QuickValue::CartridgeView));
+    assert_eq!(std::fs::read_to_string(root.path().join("Config/carousel_view.txt")).unwrap().trim(), "cartridges");
+    assert_eq!(common::boot(root.path()).quick_value(QuickRow::BoxView), Some(QuickValue::CartridgeView));
 }
 
 #[test]
@@ -539,6 +571,145 @@ fn quick_opening_moves_the_box_behind_the_cartridge_when_the_flap_closes() {
     assert!(matches!(app.phase(), Phase::Shelf));
     app.update(0.15);
     assert!(matches!(app.phase(), Phase::Inserting { .. }));
+}
+
+#[test]
+fn quick_launch_and_eject_skip_the_manual_and_return_to_the_carousel() {
+    for hold in [false, true] {
+        let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+        let mut app = setup(root.path());
+        let manual = TexId::from_raw(9000);
+        app.set_manual_cover(Some((app.manual_cover_want().unwrap(), manual)));
+        let carousel = face(&app, textures(1000).front).unwrap();
+        if hold {
+            app.apply(Action::GbaDown(Btn::A));
+            app.update(0.51);
+            app.apply(Action::GbaUp(Btn::A));
+        } else {
+            common::through(&mut app, Btn::Start);
+        }
+        for dt in [0.5, 0.6, 0.68] {
+            app.update(dt);
+            assert!(face(&app, manual).is_none());
+        }
+        assert!(matches!(app.phase(), Phase::Inserting { .. }));
+        app.update(0.2);
+        assert!(face(&app, manual).is_none());
+        app.on_core_ready();
+        app.update(2.0);
+        assert!(matches!(app.phase(), Phase::Playing { .. }));
+        app.apply(Action::Eject);
+        for _ in 0..30 {
+            app.update(0.1);
+            assert!(face(&app, manual).is_none());
+            if matches!(app.phase(), Phase::Shelf) {
+                break;
+            }
+        }
+        assert!(matches!(app.phase(), Phase::Shelf));
+        assert!(face(&app, TexId::from_raw(2000)).is_some());
+        app.update(0.8);
+        assert!(face(&app, manual).is_none());
+        assert!(frame(&app).iter().any(|d| matches!(d, Draw::Part { tex, .. } if *tex == TexId::from_raw(4000))));
+        app.update(1.0);
+        equal_pose(carousel, face(&app, textures(1000).front).unwrap());
+        common::through(&mut app, Btn::Right);
+        assert_eq!(app.selected_stem(), Some("Beta"));
+    }
+}
+
+#[test]
+fn quick_eject_retraces_the_extraction_animation() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    let mut app = setup(root.path());
+    common::through(&mut app, Btn::Start);
+    app.update(0.97);
+    let opening_box = face(&app, textures(1000).front).unwrap();
+    let opening_cart = face(&app, TexId::from_raw(2000)).unwrap();
+    let flap = |app: &App| -> Vec<_> {
+        frame(app).into_iter().filter_map(|d| match d {
+            Draw::Part { x, y, w, h, tex, uv, .. } if tex == TexId::from_raw(4000) =>
+                Some(([x, y, w, h], uv)),
+            _ => None,
+        }).collect()
+    };
+    let opening_flap = flap(&app);
+    assert!(!opening_flap.is_empty());
+    app.update(0.81);
+    assert!(matches!(app.phase(), Phase::Inserting { .. }));
+    app.apply(Action::Eject);
+    for _ in 0..200 {
+        app.update(0.01);
+        if matches!(app.phase(), Phase::Shelf) {
+            break;
+        }
+    }
+    assert!(matches!(app.phase(), Phase::Shelf));
+    app.update(0.8);
+    equal_pose(opening_box, face(&app, textures(1000).front).unwrap());
+    equal_pose(opening_cart, face(&app, TexId::from_raw(2000)).unwrap());
+    let closing_flap = flap(&app);
+    assert_eq!(opening_flap.len(), closing_flap.len());
+    for ((opening, opening_uv), (closing, closing_uv)) in opening_flap.iter().zip(closing_flap.iter()) {
+        assert_eq!(opening_uv, closing_uv);
+        for (a, b) in opening.iter().zip(closing.iter()) {
+            assert!((a - b).abs() < 0.001);
+        }
+    }
+}
+
+#[test]
+fn normal_open_box_eject_returns_to_the_contents_with_the_manual() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    let mut app = setup(root.path());
+    let manual = TexId::from_raw(9000);
+    app.set_manual_cover(Some((app.manual_cover_want().unwrap(), manual)));
+    open(&mut app);
+    common::through(&mut app, Btn::A);
+    assert!(matches!(app.phase(), Phase::Inserting { .. }));
+    assert!(face(&app, manual).is_some());
+    app.apply(Action::Eject);
+    for _ in 0..30 {
+        app.update(0.1);
+        if matches!(app.phase(), Phase::Shelf) { break; }
+    }
+    assert!(matches!(app.phase(), Phase::Shelf));
+    assert!(face(&app, manual).is_some());
+    common::through(&mut app, Btn::Up);
+    app.update(0.28);
+    assert!(face(&app, manual).is_some());
+}
+
+#[test]
+fn interrupted_quick_launches_also_return_to_the_carousel_without_the_manual() {
+    for core_failure in [false, true] {
+        let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+        let mut app = setup(root.path());
+        let manual = TexId::from_raw(9000);
+        app.set_manual_cover(Some((app.manual_cover_want().unwrap(), manual)));
+        common::through(&mut app, Btn::Start);
+        app.update(1.70);
+        app.update(0.08);
+        assert!(matches!(app.phase(), Phase::Inserting { .. }));
+        app.update(0.1);
+        if core_failure {
+            app.on_core_failed();
+        } else {
+            app.apply(Action::Eject);
+        }
+        for _ in 0..200 {
+            app.update(0.01);
+            assert!(face(&app, manual).is_none());
+            if matches!(app.phase(), Phase::Shelf) {
+                break;
+            }
+        }
+        assert!(matches!(app.phase(), Phase::Shelf));
+        app.update(1.8);
+        assert!(face(&app, manual).is_none());
+        common::through(&mut app, Btn::Right);
+        assert_eq!(app.selected_stem(), Some("Beta"));
+    }
 }
 
 #[test]

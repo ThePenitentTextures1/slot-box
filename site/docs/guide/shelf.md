@@ -39,8 +39,9 @@ selected game; see [Controls](controls.md).
 
 ## Box View
 
-When Box View is enabled and a game has box art, the carousel has these
-box-specific controls in addition to the collection controls:
+Choose **Carousel View** in Settings to switch between **Cartridge View**
+(the default) and **Box View**. When Box View is selected and a game has box
+art, the carousel has these box-specific controls in addition to the collection controls:
 
 | Button | Does |
 | --- | --- |
@@ -49,6 +50,8 @@ box-specific controls in addition to the collection controls:
 | <kbd>START</kbd> | Skip Open Box View and play using the auto-load setting |
 | <kbd>SELECT</kbd> | Inspect the box |
 | <kbd>B</kbd> | No action on the carousel; returns to it from Open Box View |
+
+Ejecting a quick-started game puts its cartridge away and returns to the carousel.
 
 The cartridge is selected first in Open Box View. Press <kbd>Down</kbd> to select the box and
 <kbd>Up</kbd> to return to the cartridge. When a manual is available, press
