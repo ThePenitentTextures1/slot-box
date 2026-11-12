@@ -3,22 +3,24 @@ use std::io::{Cursor, Read, Write};
 use slot::update::{
     check_with, clean_baseos, clock_is_wrong, install_baseos_with, install_with, newer,
     parse_baseos, parse_release, read_counted, stage, verify, wifi_conf, will_apply, Device, Kind,
-    Release, Running, Stoppable, Ticket, UpdateEvent, UpdateFail,
+    Release, Running, Stoppable, Ticket, UpdateEvent, UpdateFail, LATEST,
 };
 
 const DIGEST: &str = "e78b2771abbc41a07774fe870e08d3d870c1a06c6db42a1d799626190156aba5";
 
 fn release_json(tag: &str, zip: &str, sha256: &str) -> String {
-    let version = tag.trim_start_matches('v');
     format!(
         r#"{{
-  "stable": {{
-    "version": "{version}",
-    "tag": "{tag}",
-    "zip": "{zip}",
+  "tag_name": "{tag}",
+  "draft": false,
+  "prerelease": false,
+  "created_at": "2026-01-01T00:00:00Z",
+  "assets": [{{
+    "name": "{zip}",
+    "state": "uploaded",
     "size": 6919551,
-    "sha256": "{sha256}"
-  }}
+    "digest": "sha256:{sha256}"
+  }}]
 }}"#
     )
 }
@@ -30,10 +32,8 @@ fn slot_only(slot: &str) -> Running<'_> {
 const BOS: &str = "7e4e9ea57b6c52bb52bd627196017263e6072691a54c66e440e85faf03f1a6b1";
 
 fn baseos_json(version: &str, rgsp_name: &str, sha256: &str) -> String {
-    let slot = v1_11();
-    let slot = slot.trim_end().trim_end_matches('}');
     format!(
-        r#"{slot},
+        r#"{{
   "baseos": {{
     "version": "{version}",
     "tag": "v{version}",
@@ -84,7 +84,7 @@ fn kinds(e: UpdateEvent) -> Vec<Kind> {
 }
 
 fn check_both(json: String, slot: &str, baseos: &str) -> UpdateEvent {
-    let mut fetch = |_: &str| Ok(json.clone().into_bytes());
+    let mut fetch = |url: &str| Ok(if url == LATEST { v1_11() } else { json.clone() }.into_bytes());
     check_with(
         u64::MAX / 2,
         &mut fetch,
@@ -127,7 +127,10 @@ fn a_broken_baseos_entry_never_fails_the_check() {
 
 #[test]
 fn no_baseos_target_means_no_baseos_offer() {
-    let mut fetch = |_: &str| Ok(both_json().into_bytes());
+    let mut fetch = |url: &str| {
+        assert_eq!(url, LATEST);
+        Ok(v1_11().into_bytes())
+    };
     assert_eq!(
         kinds(check_with(u64::MAX / 2, &mut fetch, slot_only("1.10.0"))),
         [Kind::Slot]
@@ -166,7 +169,7 @@ fn parse_release_reads_the_version_url_and_digest() {
     assert_eq!(r.version, "1.11.0");
     assert_eq!(
         r.url,
-        "https://github.com/slot-cfw/slot/releases/download/v1.11.0/slot-v1.11.0-h700.zip"
+        "https://github.com/ThePenitentTextures1/slot-box/releases/download/v1.11.0/slot-v1.11.0-h700.zip"
     );
     assert_eq!(r.size, 6919551);
     assert_eq!(&r.sha256[..2], &[0xe7, 0x8b]);
@@ -331,7 +334,10 @@ fn a_check_on_a_wrong_clock_fails_without_connecting() {
 #[test]
 fn a_check_reports_a_newer_release() {
     let now = u64::MAX / 2;
-    let mut fetch = |_: &str| Ok(v1_11().into_bytes());
+    let mut fetch = |url: &str| {
+        assert_eq!(url, LATEST);
+        Ok(v1_11().into_bytes())
+    };
     match check_with(now, &mut fetch, slot_only("1.10.0")) {
         UpdateEvent::Available(v) => {
             assert_eq!(v.len(), 1);
@@ -344,6 +350,57 @@ fn a_check_reports_a_newer_release() {
         check_with(now, &mut fetch, slot_only("1.11.0")),
         UpdateEvent::UpToDate
     );
+}
+
+#[test]
+fn a_check_uses_the_latest_stable_fork_release() {
+    let mut fetch = |url: &str| {
+        assert_eq!(
+            url,
+            "https://api.github.com/repos/ThePenitentTextures1/slot-box/releases/latest"
+        );
+        Ok(v1_11().into_bytes())
+    };
+    let UpdateEvent::Available(offers) = check_with(u64::MAX / 2, &mut fetch, slot_only("1.9.0"))
+    else {
+        panic!("no update offered");
+    };
+    assert_eq!(offers[0].version, "1.11.0");
+    assert!(offers[0]
+        .url
+        .starts_with("https://github.com/ThePenitentTextures1/slot-box/releases/download/"));
+}
+
+#[test]
+fn no_fork_release_still_allows_baseos_updates() {
+    let mut fetch = |url: &str| {
+        Ok(if url == LATEST {
+            "null".to_string()
+        } else {
+            both_json()
+        }
+        .into_bytes())
+    };
+    let event = check_with(
+        u64::MAX / 2,
+        &mut fetch,
+        Running {
+            slot: "1.0.0",
+            baseos: Some(("rgsp", "1.3.0")),
+        },
+    );
+    assert_eq!(kinds(event), [Kind::BaseOs]);
+}
+
+#[test]
+fn release_requires_an_uploaded_asset_with_a_sha256_digest() {
+    let missing_digest = v1_11().replace(&format!("sha256:{DIGEST}"), "");
+    assert_eq!(
+        parse_release(&missing_digest, Device::H700),
+        Err(UpdateFail::Bad)
+    );
+    let pending = v1_11().replace("\"uploaded\"", "\"open\"");
+    assert_eq!(parse_release(&pending, Device::H700), Err(UpdateFail::Bad));
 }
 
 #[test]
@@ -695,18 +752,19 @@ const DS_DIGEST: &str = "aa8b27c0e8d3f1b2a4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e
 fn both_zips() -> String {
     format!(
         r#"{{
-  "stable": {{
-    "version": "1.11.0",
-    "tag": "v1.11.0",
-    "zip": "slot-v1.11.0-h700.zip",
-    "size": 6919551,
-    "sha256": "{DIGEST}",
-    "rgdsplus": {{
-      "zip": "slot-v1.11.0-rgdsplus.zip",
+  "tag_name": "v1.11.0",
+  "draft": false,
+  "prerelease": false,
+  "created_at": "2026-01-01T00:00:00Z",
+  "assets": [
+    {{"name": "slot-v1.11.0-h700.zip", "state": "uploaded", "size": 6919551, "digest": "sha256:{DIGEST}"}},
+    {{
+      "name": "slot-v1.11.0-rgdsplus.zip",
+      "state": "uploaded",
       "size": 8000000,
-      "sha256": "{DS_DIGEST}"
+      "digest": "sha256:{DS_DIGEST}"
     }}
-  }}
+  ]
 }}"#
     )
 }
@@ -717,7 +775,7 @@ fn parse_release_gives_the_ds_plus_its_own_zip() {
     assert_eq!(r.version, "1.11.0");
     assert_eq!(
         r.url,
-        "https://github.com/slot-cfw/slot/releases/download/v1.11.0/slot-v1.11.0-rgdsplus.zip"
+        "https://github.com/ThePenitentTextures1/slot-box/releases/download/v1.11.0/slot-v1.11.0-rgdsplus.zip"
     );
     assert_eq!(r.size, 8000000);
     assert_eq!(&r.sha256[..2], &[0xaa, 0x8b]);
@@ -758,7 +816,14 @@ fn device_of_target_reads_rgdsplus() {
 #[test]
 fn a_check_on_the_ds_plus_offers_the_ds_plus_zip() {
     let json = both_zips();
-    let mut fetch = |_: &str| Ok(json.clone().into_bytes());
+    let mut fetch = |url: &str| {
+        Ok(if url == LATEST {
+            json.clone()
+        } else {
+            both_json()
+        }
+        .into_bytes())
+    };
     let event = check_with(
         u64::MAX / 2,
         &mut fetch,

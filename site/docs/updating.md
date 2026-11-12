@@ -12,7 +12,7 @@ Make sure you are connected to Wi-Fi.
 
 From the shelf, open the menu and pick System → Check for Updates.
 
-The OTA updater will reach out to GitHub to see if there is a new release of slot or BaseOS.
+The OTA updater checks the [slot-box releases](https://github.com/ThePenitentTextures1/slot-box/releases) for slot updates. BaseOS updates are checked separately.
 
 If updates are available, they show up as a cart.
 
@@ -42,7 +42,7 @@ Update from your computer with the card in hand.
 1.  Download the latest release
     { .step-title role="heading" aria-level="3" }
 
-    Go fetch the [latest slot release](https://github.com/slot-cfw/slot/releases/latest) from GitHub and unzip it.
+    Go fetch the [latest slot-box release](https://github.com/ThePenitentTextures1/slot-box/releases/latest) from GitHub and unzip it.
 
 2.  Replace the `System/` folder
     { .step-title role="heading" aria-level="3" }

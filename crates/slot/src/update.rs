@@ -78,30 +78,35 @@ impl Device {
 
 pub fn parse_release(json: &str, device: Device) -> Result<Release, UpdateFail> {
     let v: serde_json::Value = serde_json::from_str(json).map_err(|_| UpdateFail::Bad)?;
-    let stable = &v["stable"];
-    let version = stable["version"]
-        .as_str()
+    let tag = v["tag_name"].as_str().ok_or(UpdateFail::Bad)?;
+    let version = tag.strip_prefix('v').ok_or(UpdateFail::Bad)?;
+    if !plain(version)
+        || v["draft"].as_bool() != Some(false)
+        || v["prerelease"].as_bool() != Some(false)
+    {
+        return Err(UpdateFail::Bad);
+    }
+    let zip = format!("slot-{tag}-{}.zip", device.zip_suffix());
+    let asset = v["assets"]
+        .as_array()
         .ok_or(UpdateFail::Bad)?
-        .to_string();
-    let tag = stable["tag"].as_str().ok_or(UpdateFail::Bad)?;
-    let asset = match device {
-        Device::H700 => stable,
-        Device::RgDsPlus => &stable["rgdsplus"],
-    };
-    let zip = asset["zip"].as_str().ok_or(UpdateFail::Bad)?;
-    if zip != format!("slot-v{version}-{}.zip", device.zip_suffix()) {
+        .iter()
+        .find(|asset| asset["name"].as_str() == Some(zip.as_str()))
+        .ok_or(UpdateFail::Bad)?;
+    if asset["state"].as_str() != Some("uploaded") {
         return Err(UpdateFail::Bad);
     }
     let size = asset["size"].as_u64().ok_or(UpdateFail::Bad)?;
-    let sha256 = asset["sha256"]
+    let sha256 = asset["digest"]
         .as_str()
+        .and_then(|digest| digest.strip_prefix("sha256:"))
         .and_then(hex32)
         .ok_or(UpdateFail::Bad)?;
     Ok(Release {
         kind: Kind::Slot,
         running: String::new(),
         url: format!("{RELEASES}/{tag}/{zip}"),
-        version,
+        version: version.to_string(),
         sha256,
         size,
     })
@@ -303,8 +308,10 @@ impl<R: Read> Read for Stoppable<R> {
 }
 
 pub const WIFI_CONF: &str = "Config/wifi.conf";
-pub const LATEST: &str = "https://slot-cfw.fyi/versions.json";
-const RELEASES: &str = "https://github.com/slot-cfw/slot/releases/download";
+pub const LATEST: &str =
+    "https://api.github.com/repos/ThePenitentTextures1/slot-box/releases/latest";
+const BASEOS_MANIFEST: &str = "https://slot-cfw.fyi/versions.json";
+const RELEASES: &str = "https://github.com/ThePenitentTextures1/slot-box/releases/download";
 const BASEOS_RELEASES: &str = "https://github.com/pvaibhav/BaseOS/releases/download";
 
 #[derive(Debug, Clone, Copy)]
@@ -363,18 +370,35 @@ pub fn check_with(
         Ok(body) => body,
         Err(e) => return UpdateEvent::Failed(e),
     };
-    let device = Device::of_target(running.baseos.map_or("", |(target, _)| target));
-    let slot = match parse_release(&body, device) {
-        Ok(r) => Release {
-            running: running.slot.to_string(),
-            ..r
-        },
-        Err(e) => return UpdateEvent::Failed(e),
+    let release: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(release) => release,
+        Err(_) => return UpdateEvent::Failed(UpdateFail::Bad),
     };
-    let baseos = running
-        .baseos
-        .and_then(|(target, version)| parse_baseos(&body, target, version));
-    let offers: Vec<Release> = std::iter::once(slot)
+    let device = Device::of_target(running.baseos.map_or("", |(target, _)| target));
+    let slot = match release.is_null() {
+        false => match parse_release(&body, device) {
+            Ok(r) => Some(Release {
+                running: running.slot.to_string(),
+                ..r
+            }),
+            Err(e) => return UpdateEvent::Failed(e),
+        },
+        true => None,
+    };
+    let baseos = match running.baseos {
+        Some((target, version)) => {
+            let body = match fetch(BASEOS_MANIFEST)
+                .and_then(|b| String::from_utf8(b).map_err(|_| UpdateFail::Bad))
+            {
+                Ok(body) => body,
+                Err(e) => return UpdateEvent::Failed(e),
+            };
+            parse_baseos(&body, target, version)
+        }
+        None => None,
+    };
+    let offers: Vec<Release> = slot
+        .into_iter()
         .chain(baseos)
         .filter(|r| newer(&r.version, &r.running))
         .collect();
@@ -667,7 +691,13 @@ fn run(root: &Path, job: &UpdateJob, ticket: &Ticket, tx: &Sender<UpdateEvent>) 
             let version = crate::baseos::var("BASEOS_VERSION");
             check_with(
                 now_unix(),
-                &mut |url| fetch(url, API_TIMEOUT, &mut |_| {}),
+                &mut |url| {
+                    if url == LATEST {
+                        fetch_latest()
+                    } else {
+                        fetch(url, API_TIMEOUT, &mut |_| {})
+                    }
+                },
                 Running {
                     slot: crate::build_info::Build::current().version,
                     baseos: target.as_deref().zip(version.as_deref()),
@@ -786,6 +816,28 @@ pub(crate) fn fetch(
 ) -> Result<Vec<u8>, UpdateFail> {
     let mut body = open(url, timeout, DOWNLOAD_LIMIT)?;
     read_counted(&mut body, DOWNLOAD_LIMIT, report)
+}
+
+fn fetch_latest() -> Result<Vec<u8>, UpdateFail> {
+    let agent = agent(API_TIMEOUT);
+    let response = match agent.get(LATEST).call() {
+        Ok(response) => response,
+        Err(ureq::Error::StatusCode(404)) => {
+            // Confirm the repository is accessible before treating a missing latest release as empty.
+            agent
+                .get("https://api.github.com/repos/ThePenitentTextures1/slot-box/releases?per_page=1")
+                .call()
+                .map_err(|e| request_fail(&e))?;
+            return Ok(b"null".to_vec());
+        }
+        Err(e) => return Err(request_fail(&e)),
+    };
+    let mut body = response
+        .into_body()
+        .into_with_config()
+        .limit(DOWNLOAD_LIMIT)
+        .reader();
+    read_counted(&mut body, DOWNLOAD_LIMIT, &mut |_| {})
 }
 
 fn open_range(url: &str, from: u64, to: u64) -> Result<impl Read, UpdateFail> {
