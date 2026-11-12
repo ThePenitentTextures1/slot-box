@@ -128,10 +128,46 @@ const BACK_ZOOM_MAX: f32 = 4.0;
 const LINK_TEXT_Y: f32 = 44.0;
 const LINK_LEGEND_Y: f32 = OUT_H as f32 - MOUTH_H;
 
-fn manual_page_size(canvas: slot_gfx::Canvas, spread: bool) -> (f32, f32) {
-    let columns = if spread { 2.0 } else { 1.0 };
-    let width = ((canvas.w - 24.0) / columns).min((LINK_LEGEND_Y - 24.0) * 115.0 / 85.0);
-    (width, width * 85.0 / 115.0)
+fn manual_page_size() -> (f32, f32) {
+    (LINK_LEGEND_Y * 115.0 / 85.0, LINK_LEGEND_Y)
+}
+
+fn manual_bounds(reader: &boxview::ManualReader, canvas: slot_gfx::Canvas) -> (f32, f32) {
+    let columns = if reader.spread(reader.page)[1].is_some() { 2.0 } else { 1.0 };
+    let (w, h) = manual_page_size();
+    (((columns * w * reader.zoom - canvas.w) / 2.0).max(0.0),
+        ((h * reader.zoom - LINK_LEGEND_Y) / 2.0).max(0.0))
+}
+
+fn manual_spine(reader: &boxview::ManualReader, canvas: slot_gfx::Canvas) -> f32 {
+    let width = manual_page_size().0 * reader.zoom;
+    let offset = if reader.spread(reader.page)[1].is_some() {
+        0.0
+    } else if reader.page == 0 {
+        -width / 2.0
+    } else {
+        width / 2.0
+    };
+    canvas.w / 2.0 + offset + reader.pan[0]
+}
+
+fn manual_turn(reader: &mut boxview::ManualReader, canvas: slot_gfx::Canvas, to: usize, put_down: bool) {
+    let width = manual_page_size().0;
+    let dest_spread = reader.spread(to);
+    let forward = to > reader.page;
+    let to_spine = if dest_spread[1].is_some() {
+        if forward { width } else { canvas.w - width }
+    } else if to == 0 {
+        (canvas.w - width) / 2.0
+    } else {
+        (canvas.w + width) / 2.0
+    };
+    reader.turn = Some(boxview::ManualTurn {
+        from: reader.page, to, elapsed: 0.0, from_spine: manual_spine(reader, canvas),
+        to_spine, put_down,
+    });
+    reader.buttons = [false; 6];
+    reader.last_tap = None;
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -2584,13 +2620,6 @@ impl App {
             self.box_turn = target_turn;
         }
         if let Some(reader) = &mut self.manual_reader {
-            let spread = reader.spread(reader.page);
-            let focus = match spread[1] {
-                Some(right) if right == reader.page => -1.0,
-                Some(_) => 1.0,
-                None => 0.0,
-            };
-            reader.focus += (focus - reader.focus) * (1.0 - (-12.0 * dt.max(0.0)).exp());
             if self.box_focus <= -0.999 {
                 let delta = dt.max(0.0) / boxview::MANUAL_PICKUP_SECONDS;
                 reader.pickup = if reader.closing {
@@ -2599,37 +2628,45 @@ impl App {
                     (reader.pickup + delta).min(1.0)
                 };
             }
-            if let Some((from, to, elapsed)) = reader.turn {
-                let elapsed = elapsed + dt.max(0.0);
-                reader.turn = (elapsed < boxview::MANUAL_TURN_SECONDS).then_some((from, to, elapsed));
+            let mut finished_turn = false;
+            if let Some(turn) = &mut reader.turn {
+                turn.elapsed += dt.max(0.0);
+                if turn.elapsed >= boxview::MANUAL_TURN_SECONDS {
+                    let to = turn.to;
+                    let spine = turn.to_spine;
+                    let put_down = turn.put_down;
+                    reader.page = to;
+                    reader.turn = None;
+                    reader.pan[0] = 0.0;
+                    reader.pan[0] = spine - manual_spine(reader, canvas);
+                    reader.closing = put_down;
+                    finished_turn = true;
+                }
             }
             let blend = 1.0 - (-12.0 * dt.max(0.0)).exp();
             if reader.resetting {
                 reader.zoom += (1.0 - reader.zoom) * blend;
-                reader.pan[0] *= 1.0 - blend;
                 reader.pan[1] *= 1.0 - blend;
-                if reader.zoom < 1.001 && reader.pan[0].abs() < 0.1 && reader.pan[1].abs() < 0.1 {
+                if reader.zoom < 1.001 && reader.pan[1].abs() < 0.1 {
                     reader.zoom = 1.0;
-                    reader.pan = [0.0; 2];
+                    reader.pan[1] = 0.0;
                     reader.resetting = false;
                 }
             } else if reader.pickup >= 1.0 && !reader.closing && reader.turn.is_none() {
                 let delta = reader.buttons[0] as i32 - reader.buttons[1] as i32;
                 reader.zoom = (reader.zoom * (delta as f32 * dt.max(0.0) * 1.4).exp()).clamp(1.0, BACK_ZOOM_MAX);
+                reader.pan[0] += (reader.buttons[2] as i32 - reader.buttons[3] as i32) as f32 * dt.max(0.0) * 360.0;
                 if reader.zoom > 1.001 {
-                    reader.pan[0] += (reader.buttons[2] as i32 - reader.buttons[3] as i32) as f32 * dt.max(0.0) * 240.0;
                     reader.pan[1] += (reader.buttons[4] as i32 - reader.buttons[5] as i32) as f32 * dt.max(0.0) * 240.0;
                 }
             }
-            let (w, h) = manual_page_size(canvas, reader.spread(reader.page)[1].is_some());
-            let max_x = ((w * reader.zoom - canvas.w) / 2.0).max(0.0);
-            let max_y = ((h * reader.zoom - LINK_LEGEND_Y) / 2.0).max(0.0);
+            let (max_x, max_y) = manual_bounds(reader, canvas);
             reader.pan[0] = reader.pan[0].clamp(-max_x, max_x);
             reader.pan[1] = reader.pan[1].clamp(-max_y, max_y);
             if reader.zoom <= 1.001 && !reader.resetting {
-                reader.pan = [0.0; 2];
+                reader.pan[1] = 0.0;
             }
-            if reader.closing && reader.pickup <= 0.0 && self.box_focus <= -0.999 {
+            if !finished_turn && reader.closing && reader.pickup <= 0.0 && self.box_focus <= -0.999 {
                 self.manual_reader = None;
             }
         }
@@ -2903,6 +2940,8 @@ impl App {
     }
 
     fn manual_input(&mut self, action: Action) -> bool {
+        let canvas = self.canvas();
+        let now = self.now();
         let reader = self.manual_reader.as_mut().expect("manual reader");
         match action {
             Action::GbaUp(Btn::R1) => reader.buttons[0] = false,
@@ -2919,25 +2958,39 @@ impl App {
                 reader.buttons = [false; 6];
             }
             Action::GbaDown(Btn::B) if reader.turn.is_none() => {
-                reader.closing = true;
-                reader.buttons = [false; 6];
-            }
-            Action::GbaDown(b @ (Btn::Left | Btn::Right | Btn::Up | Btn::Down))
-                if reader.zoom > 1.001 || reader.resetting => {
-                    let at = match b { Btn::Left => 2, Btn::Right => 3, Btn::Up => 4, _ => 5 };
-                    if !reader.resetting { reader.buttons[at] = true; }
-            }
-            Action::GbaDown(Btn::Left | Btn::Right) if reader.turn.is_none() && !reader.buttons[0] => {
-                let next = match action {
-                    Action::GbaDown(Btn::Left) => reader.page.saturating_sub(1),
-                    _ => (reader.page + 1).min(reader.count - 1),
-                };
-                if next != reader.page {
-                    if reader.spread(next) != reader.spread(reader.page) {
-                        reader.turn = Some((reader.page, next, 0.0));
-                    }
-                    reader.page = next;
+                if reader.page == 0 {
+                    reader.closing = true;
+                    reader.buttons = [false; 6];
+                } else {
+                    manual_turn(reader, canvas, 0, true);
                 }
+            }
+            Action::GbaDown(b @ (Btn::Left | Btn::Right)) if reader.turn.is_none() && !reader.resetting => {
+                let right = b == Btn::Right;
+                let at = if right { 3 } else { 2 };
+                if reader.buttons[at] { return true; }
+                reader.buttons[at] = true;
+                if reader.zoom <= 1.001 && !reader.buttons[0] {
+                    let (max_x, _) = manual_bounds(reader, canvas);
+                    let edge = if right { reader.pan[0] <= -max_x + 0.5 }
+                        else { reader.pan[0] >= max_x - 0.5 };
+                    let double = reader.last_tap.is_some_and(|(direction, at)|
+                        direction == right && now.saturating_sub(at) <= boxview::MANUAL_DOUBLE_TAP_MS);
+                    reader.last_tap = Some((right, now));
+                    if edge || double {
+                        let spread = reader.spread(reader.page);
+                        let next = if right {
+                            (spread[1].unwrap_or(reader.page) + 1).min(reader.count - 1)
+                        } else {
+                            reader.page.saturating_sub(1)
+                        };
+                        let next = reader.spread(next)[0].unwrap_or(next);
+                        if next != reader.page { manual_turn(reader, canvas, next, false); }
+                    }
+                }
+            }
+            Action::GbaDown(b @ (Btn::Up | Btn::Down)) if reader.zoom > 1.001 && !reader.resetting => {
+                reader.buttons[if b == Btn::Up { 4 } else { 5 }] = true;
             }
             _ => {}
         }
@@ -5981,7 +6034,7 @@ impl App {
             if let Some(tex) = self.selected_manual_cover().filter(|_| {
                 self.manual_reader.is_none() || self.box_focus > -0.999
             }) {
-                let emerging_y = box_y;
+                let emerging_y = box_y - manual_h / 2.0;
                 let target = cart_center_y - cart_height / 2.0 - 12.0 - manual_h;
                 out.push(Draw::Tex {
                     x: canvas.w / 2.0 - manual_w / 2.0,
@@ -6016,62 +6069,75 @@ impl App {
         let (small_w, small_h) = slot_ui::manual_dimensions();
         let small_w = small_w * slot_ui::BOX_VIEW_SCALE;
         let small_h = small_h * slot_ui::BOX_VIEW_SCALE;
-        let (page, turn_progress) = match reader.turn {
-            Some((from, to, elapsed)) => {
-                let t = (elapsed / boxview::MANUAL_TURN_SECONDS).clamp(0.0, 1.0);
-                (if t < 0.5 { from } else { to }, Some((from, to, t)))
-            }
-            None => (reader.page, None),
-        };
-        let spread = reader.spread(page);
-        let two = spread[1].is_some();
-        let (width, height) = manual_page_size(canvas, two);
+        let (width, height) = manual_page_size();
         let zoom = 1.0 + (reader.zoom - 1.0) * progress;
-        let focus_shift = if two {
-            let margin = ((canvas.w - width * 2.0) / 2.0 - 2.0).max(0.0);
-            reader.focus * (margin + width * 0.5 * (zoom - 1.0))
-        } else { 0.0 };
-        let center_x = canvas.w / 2.0 + (reader.pan[0] + focus_shift) * progress;
         let center_y = target_y + (LINK_LEGEND_Y / 2.0 - target_y + reader.pan[1]) * progress;
         let w = small_w + (width * zoom - small_w) * progress;
         let h = small_h + (height * zoom - small_h) * progress;
-        let left = center_x - if two { w } else { w / 2.0 };
         let top = center_y - h / 2.0;
-        for (side, index) in spread.into_iter().enumerate() {
-            let Some(index) = index else { continue };
-            let x = left + side as f32 * w;
-            if two && index == reader.page && turn_progress.is_none() && !reader.closing && reader.zoom <= 1.001 {
-                out.push(Draw::Rect { x: x - 2.0, y: top - 2.0, w: w + 4.0, h: h + 4.0,
-                    colour: [0.85, 0.67, 0.30, 1.0] });
+        let sides = |page| {
+            let [left, right] = reader.spread(page);
+            if right.is_some() { [left, right] }
+            else if page == 0 { [None, left] }
+            else { [left, None] }
+        };
+        let draw_page = |out: &mut Vec<Draw>, index: Option<usize>, x: f32| {
+            if let Some(index) = index {
+                if let Some(tex) = self.manual_page_texture(index) {
+                    out.push(Draw::Tex { x, y: top, w, h, tex, alpha: 1.0 });
+                } else {
+                    out.push(Draw::Rect { x, y: top, w, h, colour: [0.85, 0.85, 0.85, 1.0] });
+                }
             }
-            let alpha = if reader.closing && reader.page != 0 { progress } else { 1.0 };
-            if let Some(tex) = self.manual_page_texture(index) {
-                out.push(Draw::Tex { x, y: top, w, h, tex, alpha });
+        };
+        if let Some(turn) = &reader.turn {
+            let t = (turn.elapsed / boxview::MANUAL_TURN_SECONDS).clamp(0.0, 1.0);
+            let smooth = t * t * (3.0 - 2.0 * t);
+            let spine = turn.from_spine + (turn.to_spine - turn.from_spine) * smooth;
+            let forward = turn.to > turn.from;
+            let old = sides(turn.from);
+            let new = sides(turn.to);
+            let (left, right, source, reverse) = if forward {
+                (old[0], new[1], old[1], new[0])
             } else {
-                out.push(Draw::Rect { x, y: top, w, h, colour: [0.85, 0.85, 0.85, alpha] });
+                (new[0], old[1], old[0], new[1])
+            };
+            draw_page(out, left, spine - w);
+            draw_page(out, right, spine);
+            let page = if t < 0.5 { source } else { reverse };
+            if let Some(tex) = page.and_then(|index| self.manual_page_texture(index)) {
+                let direction = if forward { 1.0 } else { -1.0 };
+                let angle = std::f32::consts::PI * smooth;
+                let bend = angle.sin();
+                let pos = |u: f32| {
+                    let x = spine + direction * w * (u * angle.cos()
+                        + 0.18 * bend * (std::f32::consts::PI * u).sin());
+                    let rise = h * 0.04 * bend * (std::f32::consts::PI * u).sin();
+                    (x, rise)
+                };
+                for i in 0..16 {
+                    let a = i as f32 / 16.0;
+                    let b = (i + 1) as f32 / 16.0;
+                    let (xa, ra) = pos(a);
+                    let (xb, rb) = pos(b);
+                    let normal = if t < 0.5 { forward } else { !forward };
+                    let (u, du) = if normal { (a, b - a) } else { (1.0 - a, a - b) };
+                    out.push(Draw::Quad {
+                        corners: [[xa, top - ra], [xb, top - rb],
+                            [xb, top + h + rb], [xa, top + h + ra]],
+                        tex, uv: [u, 0.0, du, 1.0], alpha: 1.0,
+                    });
+                }
             }
-        }
-        if reader.closing && reader.page != 0 {
-            if let Some(tex) = self.selected_manual_cover() {
-                out.push(Draw::Tex {
-                    x: center_x - w / 2.0, y: top, w, h, tex, alpha: 1.0 - progress,
-                });
-            }
-        }
-        if let Some((from, to, t)) = turn_progress {
-            let turning_page = if t < 0.5 { from } else { to };
-            if let Some(tex) = self.manual_page_texture(turning_page) {
-                let forward = to > from;
-                let fold = (std::f32::consts::PI * t).cos() * if forward { 1.0 } else { -1.0 };
-                let spine = center_x;
-                let edge = spine + w * fold;
-                let lift = h * 0.035 * (std::f32::consts::PI * t).sin();
-                let (x0, x1) = (spine.min(edge), spine.max(edge));
-                out.push(Draw::Quad {
-                    corners: [[x0, top], [x1, top - lift], [x1, top + h + lift], [x0, top + h]],
-                    tex, uv: [0.0, 0.0, 1.0, 1.0], alpha: 1.0,
-                });
-            }
+        } else {
+            let spine = if progress < 1.0 {
+                canvas.w / 2.0 - w / 2.0
+            } else {
+                manual_spine(reader, canvas)
+            };
+            let [left, right] = sides(reader.page);
+            draw_page(out, left, spine - w);
+            draw_page(out, right, spine);
         }
     }
 

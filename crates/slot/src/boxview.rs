@@ -21,7 +21,18 @@ pub type BoxItem=Item;
 pub type BoxScene=Scene;
 
 pub const MANUAL_PICKUP_SECONDS: f32 = 0.30;
-pub const MANUAL_TURN_SECONDS: f32 = 0.30;
+pub const MANUAL_TURN_SECONDS: f32 = 0.50;
+pub const MANUAL_DOUBLE_TAP_MS: Millis = 300;
+
+#[derive(Clone, Debug)]
+pub struct ManualTurn {
+    pub from: usize,
+    pub to: usize,
+    pub elapsed: f32,
+    pub from_spine: f32,
+    pub to_spine: f32,
+    pub put_down: bool,
+}
 
 #[derive(Clone, Debug)]
 pub struct ManualReader {
@@ -30,17 +41,18 @@ pub struct ManualReader {
     pub pickup: f32,
     pub closing: bool,
     pub zoom: f32,
-    pub focus: f32,
     pub pan: [f32; 2],
     pub buttons: [bool; 6],
     pub resetting: bool,
-    pub turn: Option<(usize, usize, f32)>,
+    pub turn: Option<ManualTurn>,
+    pub last_tap: Option<(bool, Millis)>,
 }
 
 impl ManualReader {
     pub fn new(count: usize) -> Self {
         Self { page: 0, count, pickup: 0.0, closing: false, zoom: 1.0,
-            focus: 0.0, pan: [0.0; 2], buttons: [false; 6], resetting: false, turn: None }
+            pan: [0.0; 2], buttons: [false; 6], resetting: false, turn: None,
+            last_tap: None }
     }
 
     pub fn spread(&self, page: usize) -> [Option<usize>; 2] {
@@ -65,8 +77,8 @@ impl ManualReader {
                 if index != 0 && !pages.contains(&index) { pages.push(index); }
             }
         }
-        if let Some((from, to, _)) = self.turn {
-            for page in [from, to] {
+        if let Some(turn) = &self.turn {
+            for page in [turn.from, turn.to] {
                 for index in self.spread(page).into_iter().flatten() {
                     if index != 0 && !pages.contains(&index) { pages.push(index); }
                 }

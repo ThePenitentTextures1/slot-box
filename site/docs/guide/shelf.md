@@ -58,13 +58,14 @@ cartridge controls above apply. Open the box to change the emulator or use
 Cartridge Studio. Games without box art retain the regular cartridge controls
 directly on the carousel.
 
-With the manual selected, press <kbd>A</kbd> to pick it up. <kbd>Left</kbd> and
-<kbd>Right</kbd> move through the cover, facing pages, and back cover. Hold
-<kbd>R1</kbd> or <kbd>L1</kbd> to zoom in or out; while zoomed, hold a
-direction to pan instead of turning pages. On devices with a left stick, it can
-also pan while zoomed. <kbd>B</kbd> resets the zoom, or puts the manual down
-when it is at its normal size. Missing manuals leave the cartridge as the
-topmost item.
+With the manual selected, press <kbd>A</kbd> to pick it up. Hold
+<kbd>Left</kbd> or <kbd>Right</kbd> to pan across a spread. Double-tap a
+direction, or tap it at the outer edge, to turn to the next or previous spread.
+Hold <kbd>R1</kbd> or <kbd>L1</kbd> to zoom; while zoomed, directions pan
+instead of turning pages, including vertically. On devices with a left stick,
+it can also pan while zoomed. <kbd>B</kbd> resets the zoom, or closes and
+puts down the manual at normal size. Missing manuals leave the cartridge as
+the topmost item.
 
 With the box selected, <kbd>A</kbd> flips it, <kbd>R1</kbd> zooms in, and
 <kbd>L1</kbd> zooms out. While zoomed, hold a direction to pan and press

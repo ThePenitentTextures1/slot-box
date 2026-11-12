@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use slot_store::Cart;
 
-pub const MAX_HEIGHT: u32 = 960;
+pub const MAX_HEIGHT: u32 = 844;
 pub(crate) const MAX_FILE_BYTES: u64 = 128 * 1024 * 1024;
 pub(crate) const MAX_PIXELS: u64 = 16 * 1024 * 1024;
 

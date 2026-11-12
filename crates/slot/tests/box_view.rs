@@ -922,47 +922,71 @@ fn manual_reads_pages_turns_zoom_pans_and_puts_down() {
     app.update(0.28);
     common::through(&mut app, Btn::A);
     app.update(0.30);
-    assert!(face(&app, cover).is_some());
+    let front = face(&app, cover).unwrap();
+    assert!((front[3][1] - front[0][1] - 422.0).abs() < 0.01);
+    assert!(((front[0][0] + front[1][0]) / 2.0 - 360.0).abs() < 0.01);
 
     common::through(&mut app, Btn::Right);
     app.update(0.1);
-    assert!(frame(&app).iter().any(|d| matches!(d, Draw::Quad { tex, .. } if *tex == cover)));
-    app.update(0.21);
-    assert!(face(&app, pages[0].1).is_some());
-    assert!(face(&app, pages[1].1).is_some());
-    let left_focus = face(&app, pages[0].1).unwrap();
+    let quads = frame(&app).iter().filter(|d| matches!(d, Draw::Quad { tex, .. } if *tex == cover)).count();
+    assert_eq!(quads, 16, "turning cover is a curved sheet");
+    assert!(face(&app, cover).is_none(), "cover is not drawn twice");
+    app.update(0.41);
+    let left = face(&app, pages[0].1).unwrap();
+    let right = face(&app, pages[1].1).unwrap();
+    assert!(left[0][0].abs() < 0.01);
+    assert!((left[3][1] - left[0][1] - 422.0).abs() < 0.01);
+    assert!((left[1][0] - right[0][0]).abs() < 0.01);
+    app.apply(Action::GbaDown(Btn::Right));
+    app.update(2.0);
+    app.apply(Action::GbaUp(Btn::Right));
+    let right_edge = face(&app, pages[1].1).unwrap();
+    assert!((right_edge[1][0] - 720.0).abs() < 0.01);
     common::through(&mut app, Btn::Right);
-    assert!(!frame(&app).iter().any(|d| matches!(d, Draw::Quad { tex, .. } if *tex == pages[1].1)));
-    app.update(0.2);
-    assert!(face(&app, pages[0].1).unwrap()[0][0] < left_focus[0][0]);
-    common::through(&mut app, Btn::Right);
-    app.update(0.31);
+    app.update(0.51);
     assert!(face(&app, pages[2].1).is_some());
     assert!(face(&app, pages[3].1).is_some());
+    assert!(face(&app, pages[2].1).unwrap()[0][0].abs() < 0.01);
+    app.apply(Action::GbaDown(Btn::Right));
+    app.update(0.4);
+    app.apply(Action::GbaUp(Btn::Right));
     common::through(&mut app, Btn::Right);
+    app.update(0.10);
     common::through(&mut app, Btn::Right);
-    app.update(0.31);
+    app.update(0.51);
     assert!(face(&app, pages[4].1).is_some());
+    let back = face(&app, pages[4].1).unwrap();
+    assert!(((back[0][0] + back[1][0]) / 2.0 - 360.0).abs() < 0.01);
     common::through(&mut app, Btn::Right);
     assert!(face(&app, pages[4].1).is_some());
     common::through(&mut app, Btn::Left);
-    app.update(0.31);
+    app.update(0.51);
     assert!(face(&app, pages[3].1).is_some());
+    assert!((face(&app, pages[3].1).unwrap()[1][0] - 720.0).abs() < 0.01);
 
     app.apply(Action::GbaDown(Btn::R1));
     app.update(1.0);
     app.apply(Action::GbaUp(Btn::R1));
     assert!(app.left_stick_dpad());
     let zoomed = face(&app, pages[3].1).unwrap();
+    app.apply(Action::GbaDown(Btn::Right));
+    app.update(5.0);
+    app.apply(Action::GbaUp(Btn::Right));
+    assert!((face(&app, pages[3].1).unwrap()[1][0] - 720.0).abs() < 0.01);
     app.apply(Action::GbaDown(Btn::Left));
-    app.update(0.2);
+    app.update(15.0);
     app.apply(Action::GbaUp(Btn::Left));
-    assert!(face(&app, pages[3].1).unwrap()[0][0] > zoomed[0][0]);
+    assert!(face(&app, pages[2].1).unwrap()[0][0].abs() < 0.01);
     common::through(&mut app, Btn::B);
     app.update(1.0);
     assert!(!app.left_stick_dpad());
     assert!(face(&app, pages[3].1).is_some(), "zoomed direction must not turn pages");
     common::through(&mut app, Btn::B);
+    app.update(0.1);
+    assert!(frame(&app).iter().any(|d| matches!(d, Draw::Quad { tex, .. } if *tex == pages[2].1)));
+    app.update(0.41);
+    let closed = face(&app, cover).unwrap();
+    assert!((closed[3][1] - closed[0][1] - 422.0).abs() < 0.01);
     app.update(0.31);
     let down = face(&app, cover).unwrap();
     assert!(down[1][0] - down[0][0] < zoomed[1][0] - zoomed[0][0]);
@@ -970,6 +994,60 @@ fn manual_reads_pages_turns_zoom_pans_and_puts_down() {
     app.update(0.28);
     common::through(&mut app, Btn::A);
     assert!(matches!(app.phase(), Phase::Inserting { .. }));
+}
+
+#[test]
+fn cover_turn_and_closing_spreads_are_continuous() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    let mut app = setup(root.path());
+    let cover = TexId::from_raw(9000);
+    let pages: Vec<_> = (1..5).map(|i| (i, TexId::from_raw(9000 + i))).collect();
+    app.set_manual_cover(Some((app.manual_cover_want().unwrap(), cover)));
+    app.set_manual_page_count(5);
+    app.set_manual_page_textures(pages.clone());
+    open(&mut app);
+    common::through(&mut app, Btn::Up);
+    app.update(0.28);
+    common::through(&mut app, Btn::A);
+    app.update(0.3);
+    let before = face(&app, cover).unwrap();
+    common::through(&mut app, Btn::Right);
+    let strips: Vec<_> = frame(&app).into_iter().filter_map(|d| match d {
+        Draw::Quad { tex, corners, uv, .. } if tex == cover => Some((corners, uv)),
+        _ => None,
+    }).collect();
+    assert_eq!(strips.len(), 16);
+    assert!((strips[0].0[0][0] - before[0][0]).abs() < 0.01);
+    assert!((strips[15].0[1][0] - before[1][0]).abs() < 0.01);
+    assert!((strips[0].1[0]).abs() < 0.01 && strips[0].1[2] > 0.0);
+    app.update(0.5);
+    app.apply(Action::GbaDown(Btn::Right));
+    app.update(0.15);
+    app.apply(Action::GbaUp(Btn::Right));
+    let panned = face(&app, pages[0].1).unwrap();
+    common::through(&mut app, Btn::Right);
+    app.update(0.1);
+    common::through(&mut app, Btn::Right);
+    assert!(frame(&app).iter().any(|d| matches!(d, Draw::Quad { .. })));
+    app.update(0.5);
+    assert!(face(&app, pages[2].1).is_some());
+    assert!(panned[0][0] < -1.0, "holding right pans away from the edge");
+    common::through(&mut app, Btn::Left);
+    app.update(0.5);
+    common::through(&mut app, Btn::B);
+    let strips: Vec<_> = frame(&app).into_iter().filter_map(|d| match d {
+        Draw::Quad { tex, uv, .. } if tex == pages[0].1 => Some(uv),
+        _ => None,
+    }).collect();
+    assert_eq!(strips.len(), 16);
+    assert!(strips[0][2] < 0.0, "backward sheet begins at its right edge");
+    app.update(0.1);
+    assert!(frame(&app).iter().any(|d| matches!(d, Draw::Quad { tex, .. } if *tex == pages[0].1)));
+    app.update(0.4);
+    let cover_after = face(&app, cover).unwrap();
+    assert!((cover_after[3][1] - cover_after[0][1] - 422.0).abs() < 0.01);
+    app.update(0.3);
+    assert!(face(&app, cover).unwrap()[3][1] - face(&app, cover).unwrap()[0][1] < 422.0);
 }
 
 #[test]
@@ -998,6 +1076,25 @@ fn closing_and_launching_move_the_manual_out_of_view() {
     equal_pose(selected, face(&app, manual).unwrap());
     app.update(1.81);
     assert!(face(&app, manual).is_none());
+}
+
+#[test]
+fn closing_from_selected_box_never_exposes_manual_below_box() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    let mut app = setup(root.path());
+    let manual = TexId::from_raw(9000);
+    app.set_manual_cover(Some((app.manual_cover_want().unwrap(), manual)));
+    open(&mut app);
+    common::through(&mut app, Btn::Down);
+    app.update(0.61);
+    common::through(&mut app, Btn::B);
+    for _ in 0..110 {
+        app.update(0.015);
+        if let (Some(manual), Some(box_face)) = (face(&app, manual), face(&app, textures(1000).front)) {
+            assert!(manual[3][1] <= box_face[3][1] + 0.01,
+                "manual emerged below the box: {manual:?} {box_face:?}");
+        }
+    }
 }
 
 #[test]

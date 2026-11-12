@@ -39,21 +39,30 @@ fn dimensions(path: &Path) -> (u32, u32) {
 }
 
 #[test]
-fn downsizes_to_960_and_is_idempotent() {
+fn downsizes_to_844_and_is_idempotent() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("page.png");
     fs::write(&path, png(1920, 1440, png::BitDepth::Eight)).unwrap();
     assert!(resize_page(&path).unwrap());
-    assert_eq!(dimensions(&path), (1280, MAX_HEIGHT));
+    assert_eq!(dimensions(&path), (1125, MAX_HEIGHT));
     let resized = fs::read(&path).unwrap();
     assert!(!resize_page(&path).unwrap());
     assert_eq!(fs::read(path).unwrap(), resized);
 }
 
 #[test]
+fn previously_resized_960_pixel_pages_are_reduced_to_the_new_limit() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("page.png");
+    fs::write(&path, png(1280, 960, png::BitDepth::Eight)).unwrap();
+    assert!(resize_page(&path).unwrap());
+    assert_eq!(dimensions(&path), (1125, 844));
+}
+
+#[test]
 fn pages_at_or_below_the_limit_are_unchanged() {
     let dir = tempdir().unwrap();
-    for (width, height) in [(30, 959), (30, 960), (1200, 500)] {
+    for (width, height) in [(30, 843), (30, 844), (1200, 500)] {
         let path = dir.path().join(format!("{height}.png"));
         let original = png(width, height, png::BitDepth::Eight);
         fs::write(&path, &original).unwrap();
@@ -80,7 +89,7 @@ fn sixteen_bit_pages_keep_their_color_depth() {
     assert!(resize_page(&path).unwrap());
     let bytes = fs::read(&path).unwrap();
     let reader = png::Decoder::new(bytes.as_slice()).read_info().unwrap();
-    assert_eq!((reader.info().width, reader.info().height), (2, 960));
+    assert_eq!((reader.info().width, reader.info().height), (1, 844));
     assert_eq!(reader.info().bit_depth, png::BitDepth::Sixteen);
     let (pixels, _, _) = slot_ui::decode_png16_bytes(&bytes).unwrap();
     assert!(pixels.iter().all(|&pixel| pixel == 0x8080));
@@ -92,7 +101,7 @@ fn narrow_pages_keep_the_height_limit_and_nonzero_width() {
     let path = dir.path().join("page.png");
     fs::write(&path, png(1, 2000, png::BitDepth::Eight)).unwrap();
     assert!(resize_page(&path).unwrap());
-    assert_eq!(dimensions(&path), (1, 960));
+    assert_eq!(dimensions(&path), (1, 844));
 }
 
 #[test]
@@ -142,7 +151,7 @@ fn frontend_boot_resizes_only_pages_for_discovered_games() {
     while dimensions(&page).1 != MAX_HEIGHT && Instant::now() < until {
         std::thread::sleep(Duration::from_millis(10));
     }
-    assert_eq!(dimensions(&page), (8, MAX_HEIGHT));
+    assert_eq!(dimensions(&page), (7, MAX_HEIGHT));
     assert_eq!(fs::read(bad_page).unwrap(), b"not a PNG");
     assert_eq!(fs::read(unrelated).unwrap(), original);
     drop(frontend);

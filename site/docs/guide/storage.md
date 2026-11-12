@@ -51,7 +51,7 @@ name without its extension. Name the PNGs `<game>_page_<number>_image_1.png`;
 page numbers are read numerically, not alphabetically. For example:
 `Manuals/GBA/Metroid Fusion/Metroid Fusion_page_1_image_1.png`.
 At startup, slot resizes matching pages for games on the card that are taller
-than 960 pixels in the background, replacing those PNGs on the card. Smaller
+than 844 pixels in the background, replacing those PNGs on the card. Smaller
 pages are left unchanged. Keep a backup elsewhere if you want to retain the
 original full-resolution images. Pages that cannot be safely resized are
 left unchanged and the error is logged. The first numbered page is the front

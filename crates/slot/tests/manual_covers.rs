@@ -57,6 +57,6 @@ fn cover_is_bounded_even_if_background_resizing_is_not_yet_done() {
     fs::create_dir_all(&dir).unwrap();
     png(&dir.join("Game_page_1_image_1.png"), 12, 1440, [10, 20, 30]);
     let cover = load_cover(root.path(), &cart("Game")).unwrap().unwrap();
-    assert_eq!((cover.w, cover.h), (8, 960));
+    assert_eq!((cover.w, cover.h), (7, 844));
     assert_eq!(&cover.rgba[..4], &[10, 20, 30, 255]);
 }

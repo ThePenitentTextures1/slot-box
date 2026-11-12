@@ -366,11 +366,12 @@ mod tests {
         assert!(page_uploaded, "page worker did not load the PNG");
         assert_eq!(app.toast(), Some(slot_ui::Toast::ManualPageFailed));
         app.apply(Action::GbaDown(Btn::Right));
-        app.update(0.31);
+        app.update(0.51);
         draws.clear();
         app.draw(&mut draws);
         assert!(draws.iter().any(|draw| matches!(draw, Draw::Tex { tex, .. } if *tex == page_tex)));
         app.apply(Action::GbaDown(Btn::B));
+        app.update(0.51);
         app.update(0.31);
         app.apply(Action::GbaDown(Btn::B));
         app.update(1.93);
