@@ -4,7 +4,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use slot::frontend::Frontend;
-use slot::manual_resize::{resize_page, MAX_HEIGHT};
+use slot::manual_resize::{resize_page, Worker, MAX_HEIGHT};
 use slot_power::SimPlatform;
 use tempfile::tempdir;
 
@@ -132,21 +132,33 @@ fn color_gamma_is_preserved() {
 }
 
 #[test]
-fn frontend_boot_resizes_only_pages_for_discovered_games() {
+fn manual_resize_is_deferred_and_only_processes_the_selected_game() {
     let dir = tempdir().unwrap();
     let root = dir.path();
     fs::create_dir_all(root.join("Games/GBA")).unwrap();
     fs::write(root.join("Games/GBA/Game.gba"), vec![0; 256]).unwrap();
+    fs::write(root.join("Games/GBA/Other.gba"), vec![0; 256]).unwrap();
     let manual = root.join("Manuals/GBA/Game");
     fs::create_dir_all(&manual).unwrap();
     let bad_page = manual.join("Game_page_1_image_1.png");
     let page = manual.join("Game_page_2_image_1.png");
     let unrelated = manual.join("Game_page_1_image_2.png");
     let original = png(12, 1440, png::BitDepth::Eight);
+    let other = root.join("Manuals/GBA/Other/Other_page_1_image_1.png");
+    fs::create_dir_all(other.parent().unwrap()).unwrap();
+    fs::write(&other, &original).unwrap();
     fs::write(&bad_page, b"not a PNG").unwrap();
     fs::write(&page, &original).unwrap();
     fs::write(&unrelated, &original).unwrap();
     let frontend = Frontend::boot(Box::new(SimPlatform::at(root.to_path_buf())));
+    assert_eq!(fs::read(&page).unwrap(), original);
+    let cart = frontend
+        .app()
+        .carts()
+        .find(|cart| cart.stem == "Game")
+        .unwrap()
+        .clone();
+    let worker = Worker::start(root.to_path_buf(), vec![cart]);
     let until = Instant::now() + Duration::from_secs(10);
     while dimensions(&page).1 != MAX_HEIGHT && Instant::now() < until {
         std::thread::sleep(Duration::from_millis(10));
@@ -154,6 +166,8 @@ fn frontend_boot_resizes_only_pages_for_discovered_games() {
     assert_eq!(dimensions(&page), (7, MAX_HEIGHT));
     assert_eq!(fs::read(bad_page).unwrap(), b"not a PNG");
     assert_eq!(fs::read(unrelated).unwrap(), original);
+    assert_eq!(dimensions(&other), (12, 1440));
+    drop(worker);
     drop(frontend);
 }
 

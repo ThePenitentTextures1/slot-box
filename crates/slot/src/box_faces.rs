@@ -12,7 +12,10 @@ use slot_ui::{BoxFaceTextures, CartFace};
 use crate::app::{App, FaceWant};
 
 const WORKERS: usize = 2;
+const DETAIL_CACHE_SIZE: usize = 5;
 type Key = (usize, usize);
+type DetailJob = (Key, Cart, bool, bool, bool);
+type DetailResult = (DetailJob, Option<CartFace>, Option<CartFace>);
 
 struct JobQueue {
     jobs: VecDeque<(Key, Cart)>,
@@ -59,12 +62,22 @@ pub struct BoxFaces {
     built: Receiver<(Key, Option<BoxFaceArt>)>,
     building: Building,
     asked: Vec<FaceWant>,
+    primed: bool,
     free: Vec<TexId>,
-    details: Sender<(Cart, bool, bool, bool)>,
-    detailed: Receiver<(Option<CartFace>, Option<CartFace>)>,
+    details: Sender<DetailJob>,
+    detailed: Receiver<DetailResult>,
+    detail_pending: Option<DetailJob>,
+    detail_dead: bool,
+    detail_lru: VecDeque<(Key, Cart)>,
     failed_back: HashMap<Key, Cart>,
     failed_flap: HashMap<Key, Cart>,
     sources: HashMap<PathBuf, bool>,
+    resize_jobs: Sender<Cart>,
+    resized: Receiver<Cart>,
+    resize_pending: Option<Cart>,
+    resize_queue: Option<VecDeque<Cart>>,
+    resize_done: HashSet<PathBuf>,
+    resize_dead: bool,
 }
 
 struct BoxFaceArt {
@@ -95,15 +108,16 @@ impl BoxFaces {
                 eprintln!("slot: box faces: worker thread failed to start: {e}");
             }
         }
-        let (details, jobs) = mpsc::channel::<(Cart, bool, bool, bool)>();
+        let (details, jobs) = mpsc::channel::<DetailJob>();
         let (results, detailed) = mpsc::channel();
         let detail_root = root.clone();
         if let Err(e) = thread::Builder::new()
             .name("slot-box-details".into())
             .spawn(move || {
-                while let Ok((cart, texture, back, flap)) = jobs.recv() {
-                    let result = load_details(&detail_root, &cart, texture, back, flap);
-                    if results.send(result).is_err() {
+                while let Ok(job) = jobs.recv() {
+                    let (_, ref cart, texture, back, flap) = job;
+                    let result = load_details(&detail_root, cart, texture, back, flap);
+                    if results.send((job, result.0, result.1)).is_err() {
                         break;
                     }
                 }
@@ -111,22 +125,51 @@ impl BoxFaces {
         {
             eprintln!("slot: box details: worker thread failed to start: {e}");
         }
+        let (resize_jobs, jobs) = mpsc::channel::<Cart>();
+        let (completed, resized) = mpsc::channel();
+        let resize_root = root.clone();
+        if let Err(e) = thread::Builder::new()
+            .name("slot-box-resize".into())
+            .spawn(move || {
+                while let Ok(cart) = jobs.recv() {
+                    resize_box_art(&resize_root, &cart);
+                    if completed.send(cart).is_err() {
+                        break;
+                    }
+                }
+            })
+        {
+            eprintln!("slot: box resize: worker thread failed to start: {e}");
+        }
         Self {
             queue,
             built,
             building: Building::default(),
             asked: Vec::new(),
+            primed: false,
             free: Vec::new(),
             details,
             detailed,
+            detail_pending: None,
+            detail_dead: false,
+            detail_lru: VecDeque::new(),
             failed_back: HashMap::new(),
             failed_flap: HashMap::new(),
             sources: HashMap::new(),
+            resize_jobs,
+            resized,
+            resize_pending: None,
+            resize_queue: None,
+            resize_done: HashSet::new(),
+            resize_dead: false,
         }
     }
 
     pub fn sync(&mut self, app: &mut App, compositor: &mut Compositor) {
-        self.free.extend(app.shed_box_faces());
+        for tex in app.shed_box_faces() {
+            compositor.update_texture(tex, 1, 1, &[0; 4]);
+            self.free.push(tex);
+        }
         while let Ok((key, art)) = self.built.try_recv() {
             self.place(app, compositor, key, art);
         }
@@ -140,7 +183,7 @@ impl BoxFaces {
         let mut waiting: Vec<Key> = self
             .asked
             .iter()
-            .filter(|want| want.on_screen)
+            .filter(|want| want.on_screen && !self.primed)
             .map(|want| (want.shelf, want.index))
             .collect();
         while !waiting.is_empty() {
@@ -150,62 +193,194 @@ impl BoxFaces {
             waiting.retain(|pending| *pending != key);
             self.place(app, compositor, key, art);
         }
+        self.primed = true;
         self.sync_details(app, compositor);
+        self.sync_resize(app);
+    }
+
+    fn sync_resize(&mut self, app: &App) {
+        loop {
+            match self.resized.try_recv() {
+                Ok(cart) => {
+                    self.resize_done.insert(cart.rom);
+                    self.resize_pending = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    if !self.resize_dead {
+                        eprintln!("slot: box resize: worker stopped");
+                    }
+                    self.resize_dead = true;
+                    break;
+                }
+            }
+        }
+        if !app.boxes_active() || self.resize_dead || self.resize_pending.is_some() {
+            return;
+        }
+        if self.resize_queue.is_none() {
+            self.resize_queue = Some(app.box_resize_carts().into());
+        }
+        let preferred = app
+            .box_prefetch_wants()
+            .into_iter()
+            .filter_map(|(shelf, index)| app.face_cart(shelf, index))
+            .find(|cart| !self.resize_done.contains(&cart.rom))
+            .cloned();
+        let queue = self.resize_queue.as_mut().expect("resize queue");
+        let next = preferred.or_else(|| {
+            while queue
+                .front()
+                .is_some_and(|cart| self.resize_done.contains(&cart.rom))
+            {
+                queue.pop_front();
+            }
+            queue.pop_front()
+        });
+        if let Some(cart) = next {
+            if self.resize_jobs.send(cart.clone()).is_err() {
+                eprintln!("slot: box resize: worker unavailable");
+                self.resize_dead = true;
+            } else {
+                self.resize_pending = Some(cart);
+            }
+        }
     }
 
     fn sync_details(&mut self, app: &mut App, compositor: &mut Compositor) {
-        let Some((shelf, index, back, flap)) = app.box_detail_want() else {
-            return;
-        };
-        let key = (shelf, index);
-        let Some(cart) = app.face_cart(shelf, index).cloned() else {
-            return;
-        };
-        let back = back && self.failed_back.get(&key) != Some(&cart);
-        let flap = flap && self.failed_flap.get(&key) != Some(&cart);
-        if !back && !flap {
-            return;
+        self.sync_details_with(app, |texture, art| match texture {
+            Some(tex) => {
+                compositor.update_texture(tex, art.w, art.h, &art.rgba);
+                tex
+            }
+            None => compositor.create_texture(art.w, art.h, &art.rgba),
+        });
+    }
+
+    fn sync_details_with(
+        &mut self,
+        app: &mut App,
+        mut upload: impl FnMut(Option<TexId>, CartFace) -> TexId,
+    ) {
+        loop {
+            let (job, back_art, flap_art) = match self.detailed.try_recv() {
+                Ok(result) => result,
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    if !self.detail_dead {
+                        eprintln!("slot: box details: worker stopped");
+                    }
+                    self.detail_pending = None;
+                    self.detail_dead = true;
+                    break;
+                }
+            };
+            self.detail_pending = None;
+            let (key @ (shelf, index), cart, _, back, flap) = job;
+            if app.face_cart(shelf, index) != Some(&cart) {
+                continue;
+            }
+            let Some(mut faces) = app.box_faces_at(shelf, index) else {
+                continue;
+            };
+            if back {
+                if let Some(art) = back_art {
+                    faces.back_size = (art.w, art.h);
+                    faces.back = upload(self.free.pop(), art);
+                    self.failed_back.remove(&key);
+                } else {
+                    eprintln!("slot: box back: could not load {}", cart.stem);
+                    self.failed_back.insert(key, cart.clone());
+                    faces.back_size = (0, 1);
+                    app.box_back_unavailable(shelf, index);
+                }
+            }
+            if flap {
+                if let Some(art) = flap_art {
+                    faces.flap = Some(upload(self.free.pop(), art));
+                    self.failed_flap.remove(&key);
+                } else {
+                    eprintln!("slot: box flap: could not load {}", cart.stem);
+                    self.failed_flap.insert(key, cart.clone());
+                }
+            }
+            app.set_box_faces(shelf, index, Some(faces));
+            self.detail_lru.retain(|(old, _)| *old != key);
+            self.detail_lru.push_back((key, cart));
         }
-        let Some(&texture) = self.sources.get(&cart.rom) else {
-            return;
-        };
-        if self
-            .details
-            .send((cart.clone(), texture, back, flap))
-            .is_err()
-        {
-            eprintln!("slot: box details: worker unavailable");
-            return;
-        }
-        let Ok((back_art, flap_art)) = self.detailed.recv() else {
-            eprintln!("slot: box details: worker stopped");
-            return;
-        };
-        let Some(mut faces) = app.box_faces_at(shelf, index) else {
-            return;
-        };
-        if back {
-            if let Some(art) = back_art {
-                faces.back = self.texture(compositor, &art);
-                faces.back_size = (art.w, art.h);
-                self.failed_back.remove(&key);
-            } else {
-                eprintln!("slot: box back: could not load {}", cart.stem);
-                self.failed_back.insert(key, cart.clone());
-                faces.back_size = (0, 1);
-                app.box_back_unavailable(shelf, index);
+
+        let wants = app.box_prefetch_wants();
+        let selected = wants
+            .first()
+            .and_then(|&key| app.face_cart(key.0, key.1).cloned().map(|cart| (key, cart)));
+        if let Some(selected) = selected.as_ref() {
+            if let Some(at) = self.detail_lru.iter().position(|entry| entry == selected) {
+                let entry = self.detail_lru.remove(at).expect("LRU entry");
+                self.detail_lru.push_back(entry);
             }
         }
-        if flap {
-            if let Some(art) = flap_art {
-                faces.flap = Some(self.texture(compositor, &art));
-                self.failed_flap.remove(&key);
-            } else {
-                eprintln!("slot: box flap: could not load {}", cart.stem);
-                self.failed_flap.insert(key, cart);
+        while self.detail_lru.len() > DETAIL_CACHE_SIZE {
+            let (key, cart) = self.detail_lru.pop_front().expect("LRU entry");
+            self.failed_back.remove(&key);
+            self.failed_flap.remove(&key);
+            if app.face_cart(key.0, key.1) != Some(&cart) {
+                continue;
+            }
+            if let Some(mut faces) = app.box_faces_at(key.0, key.1) {
+                if faces.back != faces.front {
+                    self.free.push(faces.back);
+                    upload(Some(faces.back), empty_face());
+                }
+                if let Some(flap) = faces.flap.take() {
+                    self.free.push(flap);
+                    upload(Some(flap), empty_face());
+                }
+                faces.back = faces.front;
+                faces.back_size = (0, 0);
+                app.set_box_faces(key.0, key.1, Some(faces));
             }
         }
-        app.set_box_faces(shelf, index, Some(faces));
+        let loading = app
+            .box_detail_want()
+            .is_some_and(|(shelf, index, back, flap)| {
+                let key = (shelf, index);
+                let Some(cart) = app.face_cart(shelf, index) else {
+                    return false;
+                };
+                (back && self.failed_back.get(&key) != Some(cart))
+                    || (flap && self.failed_flap.get(&key) != Some(cart))
+            });
+        app.set_box_detail_loading(loading && !self.detail_dead);
+        if self.detail_pending.is_some() || self.detail_dead {
+            return;
+        }
+        for key in wants {
+            let Some(cart) = app.face_cart(key.0, key.1).cloned() else {
+                continue;
+            };
+            let Some(faces) = app.box_faces_at(key.0, key.1) else {
+                continue;
+            };
+            let back = faces.back == faces.front
+                && faces.back_size != (0, 1)
+                && self.failed_back.get(&key) != Some(&cart);
+            let flap = faces.flap.is_none() && self.failed_flap.get(&key) != Some(&cart);
+            if !back && !flap {
+                continue;
+            }
+            let Some(&texture) = self.sources.get(&cart.rom) else {
+                continue;
+            };
+            let job = (key, cart, texture, back, flap);
+            if self.details.send(job.clone()).is_err() {
+                eprintln!("slot: box details: worker unavailable");
+                self.detail_dead = true;
+                app.set_box_detail_loading(false);
+                return;
+            }
+            self.detail_pending = Some(job);
+            break;
+        }
     }
 
     fn requeue(&mut self, app: &App, wants: &[FaceWant]) {
@@ -287,6 +462,14 @@ impl Drop for BoxFaces {
     }
 }
 
+fn empty_face() -> CartFace {
+    CartFace {
+        rgba: vec![0; 4],
+        w: 1,
+        h: 1,
+    }
+}
+
 fn work(queue: &Shared, outbox: &Sender<(Key, Option<BoxFaceArt>)>, root: &Path) {
     let (lock, wake) = &**queue;
     loop {
@@ -320,7 +503,7 @@ fn build(root: &Path, cart: &Cart) -> Option<BoxFaceArt> {
             slot_ui::decode_png(&art.side.path),
         );
         if let (Some(front), Some(side)) = separate {
-            assemble(front, side)
+            assemble(limit_height(front), limit_height(side))
         } else {
             None
         }
@@ -415,25 +598,33 @@ fn load_texture_atlas(path: &Path) -> Option<BoxFaceArt> {
     let side = crop(&rgba, w, h, face_w, side_w)?;
     let front_x = face_w.checked_add(side_w)?;
     let front = crop(&rgba, w, h, front_x, face_w)?;
-    Some(BoxFaceArt {
-        front: CartFace {
-            rgba: front,
-            w: face_w,
-            h,
-        },
-        side: CartFace {
-            rgba: side,
-            w: side_w,
-            h,
-        },
-        pivot: [(face_w + side_w) as f32, h as f32 / 2.0],
-        front_center: [
-            (face_w + side_w) as f32 + face_w as f32 / 2.0,
-            h as f32 / 2.0,
-        ],
-        japanese: false,
-        texture: true,
-    })
+    assemble(
+        limit_height((front, face_w, h)),
+        limit_height((side, side_w, h)),
+    )
+}
+
+fn limit_height((rgba, w, h): (Vec<u8>, u32, u32)) -> (Vec<u8>, u32, u32) {
+    if h <= 420 {
+        (rgba, w, h)
+    } else {
+        slot_ui::thumbnail(&rgba, w, h, u32::MAX, 420)
+    }
+}
+
+fn resize_box_art(root: &Path, cart: &Cart) {
+    for (suffix, width, height, atlas) in [
+        ("front", u32::MAX, 420, false),
+        ("side", u32::MAX, 420, false),
+        ("back", 720, u32::MAX, false),
+        ("texture", u32::MAX, 420, true),
+    ] {
+        if let Some(path) = box_art_file(root, cart, suffix) {
+            if let Err(e) = crate::manual_resize::resize_image(&path, width, height, atlas) {
+                eprintln!("slot: box resize {}: {e}", path.display());
+            }
+        }
+    }
 }
 
 fn load_details(
@@ -483,6 +674,15 @@ fn load_details(
                 }
                 let atlas = box_art_file(root, cart, "texture")?;
                 decode(&atlas, true)
+            })
+            .map(|image| {
+                if image.w <= 720 {
+                    image
+                } else {
+                    let (rgba, w, h) =
+                        slot_ui::thumbnail(&image.rgba, image.w, image.h, 720, u32::MAX);
+                    CartFace { rgba, w, h }
+                }
             });
         let flap_art = if flap && cached.is_none() {
             image.as_ref().and_then(|image| {
@@ -609,6 +809,245 @@ fn flap_colour(colour: [u8; 3]) -> Option<CartFace> {
 #[cfg(test)]
 mod flap_tests {
     use super::*;
+    use slot_input::Action;
+
+    #[test]
+    fn resize_sweep_prioritizes_selected_and_neighboring_games() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::root::ensure(dir.path());
+        std::fs::create_dir_all(dir.path().join("Games/GBA")).unwrap();
+        for i in 0..4 {
+            std::fs::write(
+                dir.path().join(format!("Games/GBA/Game{i}.gba")),
+                vec![0; 256],
+            )
+            .unwrap();
+        }
+        slot_store::write_carousel_view(dir.path(), slot_store::CarouselView::Boxes).unwrap();
+        slot_store::write_slot_state(
+            dir.path(),
+            &slot_store::SlotState {
+                clock_set: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut app = App::boot(dir.path());
+        for want in app.box_face_wants() {
+            let front = TexId::from_raw(want.index + 1);
+            app.set_box_faces(
+                want.shelf,
+                want.index,
+                Some(BoxFaceTextures {
+                    front,
+                    side: front,
+                    back: front,
+                    flap: None,
+                    front_size: (100, 100),
+                    side_size: (20, 100),
+                    back_size: (0, 0),
+                    japanese: false,
+                    pivot: [120.0, 50.0],
+                    front_center: [170.0, 50.0],
+                }),
+            );
+        }
+        let mut worker = BoxFaces::spawn(dir.path().to_path_buf());
+        let (send_jobs, jobs) = mpsc::channel();
+        let (completed, results) = mpsc::channel();
+        worker.resize_jobs = send_jobs;
+        worker.resized = results;
+        worker.sync_resize(&app);
+        let first = jobs.try_recv().unwrap();
+        assert_eq!(first.stem, "Game0");
+        app.apply(Action::ShelfRight);
+        completed.send(first).unwrap();
+        worker.sync_resize(&app);
+        let second = jobs.try_recv().unwrap();
+        assert_eq!(second.stem, "Game1");
+        completed.send(second).unwrap();
+        worker.sync_resize(&app);
+        let third = jobs.try_recv().unwrap();
+        assert_eq!(third.stem, "Game2");
+        completed.send(third).unwrap();
+        worker.sync_resize(&app);
+        assert_eq!(jobs.try_recv().unwrap().stem, "Game3");
+    }
+
+    #[test]
+    fn pending_details_do_not_block_and_lru_reprioritizes_new_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::root::ensure(dir.path());
+        std::fs::create_dir_all(dir.path().join("Games/GBA")).unwrap();
+        for i in 0..8 {
+            std::fs::write(
+                dir.path().join(format!("Games/GBA/Game{i}.gba")),
+                vec![0; 256],
+            )
+            .unwrap();
+        }
+        slot_store::write_carousel_view(dir.path(), slot_store::CarouselView::Boxes).unwrap();
+        slot_store::write_slot_state(
+            dir.path(),
+            &slot_store::SlotState {
+                clock_set: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut app = App::boot(dir.path());
+        let mut worker = BoxFaces::spawn(dir.path().to_path_buf());
+        for want in app.box_face_wants() {
+            let cart = app.face_cart(want.shelf, want.index).unwrap();
+            worker.sources.insert(cart.rom.clone(), false);
+            let front = TexId::from_raw(want.index + 1);
+            app.set_box_faces(
+                want.shelf,
+                want.index,
+                Some(BoxFaceTextures {
+                    front,
+                    side: front,
+                    back: front,
+                    flap: None,
+                    front_size: (100, 100),
+                    side_size: (20, 100),
+                    back_size: (0, 0),
+                    japanese: false,
+                    pivot: [120.0, 50.0],
+                    front_center: [170.0, 50.0],
+                }),
+            );
+        }
+        let (send_jobs, jobs) = mpsc::channel();
+        let (results, received) = mpsc::channel();
+        worker.details = send_jobs;
+        worker.detailed = received;
+        let mut next = 100;
+        let mut upload = |old: Option<TexId>, _: CartFace| {
+            old.unwrap_or_else(|| {
+                next += 1;
+                TexId::from_raw(next)
+            })
+        };
+        worker.sync_details_with(&mut app, &mut upload);
+        let first = jobs.try_recv().unwrap();
+        assert_eq!(first.1.stem, "Game0");
+        worker.sync_details_with(&mut app, &mut upload);
+        assert!(
+            jobs.try_recv().is_err(),
+            "pending work must not be duplicated"
+        );
+        app.apply(Action::ShelfRight);
+        let face = || CartFace {
+            rgba: vec![255; 4],
+            w: 1,
+            h: 1,
+        };
+        results.send((first, Some(face()), Some(face()))).unwrap();
+        worker.sync_details_with(&mut app, &mut upload);
+        let mut job = jobs.try_recv().unwrap();
+        assert_eq!(job.1.stem, "Game1", "selection must outrank old neighbors");
+        for expected in 1..7 {
+            assert_eq!(job.1.stem, format!("Game{expected}"));
+            app.apply(Action::ShelfRight);
+            results.send((job, Some(face()), Some(face()))).unwrap();
+            worker.sync_details_with(&mut app, &mut upload);
+            assert!(worker.detail_lru.len() <= DETAIL_CACHE_SIZE);
+            job = jobs.try_recv().unwrap();
+        }
+        assert_eq!(job.1.stem, "Game7");
+        assert!(worker
+            .detail_lru
+            .iter()
+            .all(|(_, cart)| cart.stem != "Game0"));
+        let selected = app.box_prefetch_wants()[0];
+        let faces = app.box_faces_at(selected.0, selected.1).unwrap();
+        assert_eq!(
+            faces.back, faces.front,
+            "the current pending game was not misassigned another back"
+        );
+    }
+
+    #[test]
+    fn box_art_is_resized_on_disk_and_atlas_panels_remain_usable() {
+        let dir = tempfile::tempdir().unwrap();
+        let boxes = dir.path().join("Boxes/GBA");
+        std::fs::create_dir_all(&boxes).unwrap();
+        let write = |name: &str, w: u32, h: u32, pixels: &[u8]| {
+            let file = std::fs::File::create(boxes.join(name)).unwrap();
+            let mut encoder = png::Encoder::new(file, w, h);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(pixels)
+                .unwrap();
+        };
+        write("Game-front.png", 600, 840, &vec![255; 600 * 840 * 4]);
+        write("Game-side.png", 80, 840, &vec![255; 80 * 840 * 4]);
+        write("Game-back.png", 1440, 1000, &vec![255; 1440 * 1000 * 4]);
+        let (w, h) = (1800, 840);
+        let mut atlas = vec![255; w * h * 4];
+        for y in 0..h {
+            for x in 0..w {
+                let i = (y * w + x) * 4;
+                atlas[i] = if x < h {
+                    10
+                } else if x < w - h {
+                    20
+                } else {
+                    30
+                };
+            }
+        }
+        write("Game-texture.png", w as u32, h as u32, &atlas);
+        let cart = Cart {
+            platform: slot_store::Platform::Gba,
+            stem: "Game".into(),
+            rom: "Game.gba".into(),
+            label: None,
+            title: "Game".into(),
+            code: String::new(),
+            shell: None,
+        };
+        let art = build(dir.path(), &cart).unwrap();
+        assert_eq!((art.front.w, art.front.h), (300, 420));
+        assert_eq!((art.side.w, art.side.h), (40, 420));
+        let (back, _) = load_details(dir.path(), &cart, false, true, false);
+        assert_eq!((back.as_ref().unwrap().w, back.unwrap().h), (720, 500));
+        let (_, width, height) = slot_ui::decode_png(&boxes.join("Game-front.png")).unwrap();
+        assert_eq!(
+            (width, height),
+            (600, 840),
+            "loading must not rewrite artwork on the rendering path"
+        );
+        resize_box_art(dir.path(), &cart);
+        for (name, dimensions) in [
+            ("front", (300, 420)),
+            ("side", (40, 420)),
+            ("back", (720, 500)),
+            ("texture", (900, 420)),
+        ] {
+            let (_, width, height) =
+                slot_ui::decode_png(&boxes.join(format!("Game-{name}.png"))).unwrap();
+            assert_eq!((width, height), dimensions);
+        }
+        let art = load_texture_atlas(&boxes.join("Game-texture.png")).unwrap();
+        assert_eq!(
+            (art.front.w, art.front.h, art.side.w, art.side.h),
+            (420, 420, 60, 420)
+        );
+        assert_eq!(art.front.rgba[0], 30);
+        assert_eq!(art.side.rgba[0], 20);
+        let (back, _) = load_details(dir.path(), &cart, true, true, false);
+        assert_eq!(back.unwrap().rgba[0], 10);
+        let original = std::fs::read(boxes.join("Game-front.png")).unwrap();
+        resize_box_art(dir.path(), &cart);
+        assert_eq!(
+            std::fs::read(boxes.join("Game-front.png")).unwrap(),
+            original
+        );
+    }
 
     #[test]
     fn flap_uses_the_top_center_back_pixel_and_keeps_cardboard_white() {
@@ -664,9 +1103,9 @@ mod flap_tests {
         let worker = BoxFaces::spawn(dir.path().to_path_buf());
         worker
             .details
-            .send((cart.clone(), false, true, true))
+            .send(((0, 0), cart.clone(), false, true, true))
             .unwrap();
-        let (worker_back, worker_flap) = worker
+        let (_, worker_back, worker_flap) = worker
             .detailed
             .recv_timeout(std::time::Duration::from_secs(5))
             .unwrap();

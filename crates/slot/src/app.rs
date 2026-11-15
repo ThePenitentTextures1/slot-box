@@ -661,6 +661,8 @@ pub struct App {
     carousel: CarouselKeys,
     carousel_view: CarouselView,
     box_scene: BoxScene,
+    box_detail_loading: bool,
+    box_cart_loading: bool,
     box_open_from: boxview::BoxPose,
     manual_cover: Option<(Cart, TexId)>,
     manual_page_count: usize,
@@ -1175,6 +1177,8 @@ impl App {
             carousel: CarouselKeys::default(),
             carousel_view: CarouselView::default(),
             box_scene: BoxScene::Carousel,
+            box_detail_loading: false,
+            box_cart_loading: false,
             box_open_from: boxview::BoxPose {
                 center: [0.0, 0.0],
                 scale: slot_ui::BOX_VIEW_SCALE,
@@ -3976,6 +3980,7 @@ impl App {
                 .map(|i| (self.shelf_at, i)),
         );
         let bundle = self.bundle_seats();
+        let box_prefetch = self.box_prefetch_wants();
         wants.extend(bundle.iter().copied());
         wants
             .into_iter()
@@ -3986,6 +3991,7 @@ impl App {
                     && (self.carousel_view != CarouselView::Boxes
                         || crate::box_art_fetch::system_id(shelf.carts[*i].platform).is_none()
                         || bundle.contains(&(*at, *i))
+                        || box_prefetch.contains(&(*at, *i))
                         || (selected
                             && (matches!(
                                 self.box_scene,

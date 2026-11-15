@@ -45,7 +45,7 @@ fn setup(root: &std::path::Path) -> App {
 }
 
 #[test]
-fn carousel_requests_only_unboxed_cart_faces_until_a_box_is_opened() {
+fn carousel_prefetches_selected_box_cart_and_keeps_unboxed_faces() {
     let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
     write_carousel_view(root.path(), CarouselView::Boxes).unwrap();
     let mut app = common::boot(root.path());
@@ -54,10 +54,10 @@ fn carousel_requests_only_unboxed_cart_faces_until_a_box_is_opened() {
     app.set_box_faces(wants[0].shelf, wants[0].index, Some(textures(1000)));
     app.set_box_faces(wants[1].shelf, wants[1].index, None);
     let cart_wants = app.face_wants();
-    assert!(!cart_wants.iter().any(|w| w.index == wants[0].index));
+    assert!(cart_wants.iter().any(|w| w.index == wants[0].index));
     assert!(cart_wants.iter().any(|w| w.index == wants[1].index));
     app.apply(Action::SelectTap);
-    assert!(!app.face_wants().iter().any(|w| w.index == wants[0].index));
+    assert!(app.face_wants().iter().any(|w| w.index == wants[0].index));
 
     let mut app = common::boot(root.path());
     app.set_box_faces(wants[0].shelf, wants[0].index, Some(textures(1000)));
@@ -178,6 +178,57 @@ fn an_unavailable_back_cannot_be_inspected_or_flipped() {
     app.set_box_faces(want.shelf, want.index, Some(faces));
     app.update(1.0);
     assert!(face(&app, faces.front).is_some());
+}
+
+#[test]
+fn carousel_prefetch_prioritizes_selected_box_then_neighbors() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta", "Gamma", "Omega"]);
+    let mut app = setup(root.path());
+    let before = app.box_prefetch_wants();
+    assert_eq!(before.len(), 3);
+    assert_eq!(
+        app.face_cart(before[0].0, before[0].1).unwrap().stem,
+        "Alpha"
+    );
+    app.apply(Action::ShelfRight);
+    let after = app.box_prefetch_wants();
+    let stems: Vec<_> = after
+        .iter()
+        .map(|&(s, i)| app.face_cart(s, i).unwrap().stem.as_str())
+        .collect();
+    assert_eq!(stems, ["Beta", "Gamma", "Alpha"]);
+}
+
+#[test]
+fn opening_waits_for_art_without_freezing_and_can_be_cancelled() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    let mut app = setup(root.path());
+    app.apply(Action::GbaDown(Btn::A));
+    app.apply(Action::GbaUp(Btn::A));
+    app.set_box_detail_loading(true);
+    app.update(4.0);
+    let mut draws = Vec::new();
+    app.draw(&mut draws);
+    assert!(
+        draws
+            .iter()
+            .filter(|d| matches!(d, Draw::Rect { w, h, .. } if *w == 7.0 && *h == 7.0))
+            .count()
+            >= 4
+    );
+    assert!(app.manual_cover_want().is_some());
+    app.apply(Action::GbaDown(Btn::B));
+    assert!(app.manual_cover_want().is_none());
+    app.apply(Action::GbaDown(Btn::A));
+    app.apply(Action::GbaUp(Btn::A));
+    app.set_box_cart_loading(true);
+    app.update(4.0);
+    app.set_box_cart_loading(false);
+    app.update(2.0);
+    assert!(app.manual_cover_want().is_some());
+    app.apply(Action::GbaDown(Btn::B));
+    app.update(2.0);
+    assert!(app.manual_cover_want().is_none());
 }
 
 fn equal_pose(a: [[f32; 2]; 4], b: [[f32; 2]; 4]) {
@@ -1851,6 +1902,21 @@ fn missing_box_art_keeps_normal_cartridge_launch() {
     write_carousel_view(root.path(), CarouselView::Boxes).unwrap();
     let mut app = common::boot(root.path());
     assert!(matches!(app.phase(), Phase::Shelf));
+    let selected = app.box_face_wants()[0];
+    app.set_box_faces(selected.shelf, selected.index, None);
+    app.apply(Action::GbaDown(Btn::A));
+    app.apply(Action::GbaUp(Btn::A));
+    assert!(matches!(app.phase(), Phase::Inserting { .. }));
+}
+
+#[cfg(feature = "nds")]
+#[test]
+fn unsupported_box_platform_keeps_normal_cartridge_launch() {
+    let root = common::tmp_root_with_carts(&[]);
+    std::fs::create_dir_all(root.path().join("Games/NDS")).unwrap();
+    std::fs::write(root.path().join("Games/NDS/Game.nds"), vec![0; 512]).unwrap();
+    write_carousel_view(root.path(), CarouselView::Boxes).unwrap();
+    let mut app = common::boot(root.path());
     app.apply(Action::GbaDown(Btn::A));
     app.apply(Action::GbaUp(Btn::A));
     assert!(matches!(app.phase(), Phase::Inserting { .. }));

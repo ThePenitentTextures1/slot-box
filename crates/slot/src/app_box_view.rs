@@ -135,6 +135,23 @@ impl App {
 
     pub(super) fn tick_box_scene(&mut self) {
         let now = self.now();
+        if self.box_detail_loading || self.box_cart_loading {
+            match self.box_scene {
+                BoxScene::FlippingBack { from, .. } => {
+                    self.box_scene = BoxScene::FlippingBack { started: now, from };
+                    return;
+                }
+                BoxScene::Opening { .. } => {
+                    self.box_scene = BoxScene::Opening { started: now };
+                    return;
+                }
+                BoxScene::QuickOpening { .. } => {
+                    self.box_scene = BoxScene::QuickOpening { started: now };
+                    return;
+                }
+                _ => {}
+            }
+        }
         if let BoxScene::PreparingClose { started, angle } = self.box_scene {
             let t = (now.saturating_sub(started) as f32 / BOX_FLIP_MS as f32).clamp(0.0, 1.0);
             self.box_turn = angle * (1.0 - t * t * (3.0 - 2.0 * t));
@@ -409,6 +426,20 @@ impl App {
         if self.manual_reader.is_some() {
             return self.manual_input(action);
         }
+        if (self.box_detail_loading || self.box_cart_loading)
+            && matches!(action, Action::GbaDown(Btn::B))
+            && matches!(
+                self.box_scene,
+                BoxScene::FlippingBack { .. }
+                    | BoxScene::Opening { .. }
+                    | BoxScene::QuickOpening { .. }
+            )
+        {
+            self.box_scene = BoxScene::Carousel;
+            self.box_detail_loading = false;
+            self.box_cart_loading = false;
+            return true;
+        }
         if matches!(
             self.box_scene,
             BoxScene::FlippingBack { .. }
@@ -426,6 +457,24 @@ impl App {
         match self.box_scene {
             BoxScene::Carousel => {
                 if self.selected_box().is_none() {
+                    if !self.shelf().box_checked(self.shelf().index)
+                        && self
+                            .shelf()
+                            .carts
+                            .get(self.shelf().index)
+                            .is_some_and(|cart| {
+                                crate::box_art_fetch::system_id(cart.platform).is_some()
+                            })
+                        && matches!(
+                            action,
+                            Action::GbaDown(Btn::A | Btn::Start)
+                                | Action::GbaUp(Btn::A)
+                                | Action::SelectTap
+                                | Action::Insert
+                        )
+                    {
+                        return true;
+                    }
                     return false;
                 }
                 match action {
@@ -842,6 +891,63 @@ impl App {
         (back || flap).then_some((self.shelf_at, self.shelf().index, back, flap))
     }
 
+    pub fn box_prefetch_wants(&self) -> Vec<(usize, usize)> {
+        if !self.on_shelf() || self.carousel_view != CarouselView::Boxes {
+            return Vec::new();
+        }
+        self.shelf()
+            .around(1)
+            .into_iter()
+            .filter(|&index| self.shelf().box_faces(index).is_some())
+            .map(|index| (self.shelf_at, index))
+            .collect()
+    }
+
+    pub fn boxes_active(&self) -> bool {
+        self.on_shelf() && self.carousel_view == CarouselView::Boxes
+    }
+
+    pub fn box_resize_carts(&self) -> Vec<Cart> {
+        let mut seen = std::collections::HashSet::new();
+        self.shelves
+            .iter()
+            .flat_map(|(_, shelf)| &shelf.carts)
+            .filter(|cart| {
+                crate::box_art_fetch::system_id(cart.platform).is_some()
+                    && seen.insert(cart.rom.clone())
+            })
+            .cloned()
+            .collect()
+    }
+
+    pub fn set_box_detail_loading(&mut self, loading: bool) {
+        self.box_detail_loading = loading;
+    }
+
+    pub fn box_cart_is_loading(&self) -> bool {
+        matches!(
+            self.box_scene,
+            BoxScene::Opening { .. } | BoxScene::QuickOpening { .. }
+        ) && self.shelf().face(self.shelf().index).is_none()
+    }
+
+    pub fn set_box_cart_loading(&mut self, loading: bool) {
+        self.box_cart_loading = loading;
+    }
+
+    pub fn take_prefetched_cart_faces(&mut self, shelf: usize, index: usize) -> Vec<TexId> {
+        if !self.boxes_active() || self.bundle_seats().contains(&(shelf, index)) {
+            return Vec::new();
+        }
+        let Some((_, shelf)) = self.shelves.get_mut(shelf) else {
+            return Vec::new();
+        };
+        let mut textures = Vec::new();
+        textures.extend(shelf.take_face(index));
+        textures.extend(shelf.take_interior(index));
+        textures
+    }
+
     pub fn box_faces_at(&self, shelf: usize, index: usize) -> Option<slot_ui::BoxFaceTextures> {
         self.shelves.get(shelf)?.1.box_faces(index)
     }
@@ -953,6 +1059,25 @@ impl App {
             BoxScene::Open { .. } | BoxScene::PreparingClose { .. } => self.draw_open_box(1.0, out),
             BoxScene::QuickLaunched => self.draw_open_box(1.0, out),
             BoxScene::Carousel => return false,
+        }
+        if (self.box_detail_loading || self.box_cart_loading)
+            && matches!(
+                self.box_scene,
+                BoxScene::FlippingBack { .. }
+                    | BoxScene::Opening { .. }
+                    | BoxScene::QuickOpening { .. }
+            )
+        {
+            let phase = (now / 120 % 4) as usize;
+            for i in 0..4 {
+                out.push(Draw::Rect {
+                    x: canvas.w / 2.0 - 20.0 + i as f32 * 12.0,
+                    y: canvas.h - 36.0,
+                    w: 7.0,
+                    h: 7.0,
+                    colour: [1.0, 1.0, 1.0, if i == phase { 1.0 } else { 0.3 }],
+                });
+            }
         }
         true
     }

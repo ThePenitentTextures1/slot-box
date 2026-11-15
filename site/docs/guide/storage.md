@@ -64,6 +64,11 @@ Box artwork lives in `Boxes/<system>/` as `<game>-front.png` and
 cannot be flipped unless a `<game>-texture.png` supplies one. A 1×1
 `<game>-flap.png` supplies the flap color; when absent, slot generates it
 from the back artwork when the flap is needed.
+After Box View starts, slot resizes matching artwork in the background,
+replacing the card's PNGs: fronts and sides are limited to 420 pixels high,
+backs to 720 pixels wide, and packed textures to 420 pixels high. Smaller
+images are not enlarged. Images that cannot be safely resized are left
+unchanged and the error is logged.
 
 ## Saves and states
 

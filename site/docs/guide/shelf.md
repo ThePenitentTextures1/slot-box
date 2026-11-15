@@ -55,6 +55,9 @@ art, the carousel has these box-specific controls in addition to the collection 
 | <kbd>B</kbd> | No action on the carousel; returns to it from Open Box View |
 
 Ejecting a quick-started game puts its cartridge away and returns to the carousel.
+Artwork for the selected box and its neighbors loads in the background. If
+the selected artwork is still loading when a box is opened or inspected,
+the carousel shows a loading indicator; press <kbd>B</kbd> to cancel.
 
 The cartridge is selected first in Open Box View. Press <kbd>Down</kbd> to select the box and
 <kbd>Up</kbd> to return to the cartridge. When a manual is available, press
