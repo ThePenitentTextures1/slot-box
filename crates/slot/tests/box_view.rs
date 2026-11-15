@@ -141,6 +141,45 @@ fn box_details_are_requested_for_opening_and_inspection_not_the_carousel() {
     assert_eq!(app.box_detail_want(), Some((key.0, key.1, false, true)));
 }
 
+#[test]
+fn an_unavailable_back_cannot_be_inspected_or_flipped() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    write_carousel_view(root.path(), CarouselView::Boxes).unwrap();
+    let initial = common::boot(root.path());
+    let want = initial.box_face_wants()[0];
+    let mut app = setup(root.path());
+    let mut faces = textures(1000);
+    faces.back = faces.front;
+    faces.back_size = (0, 0);
+    app.set_box_faces(want.shelf, want.index, Some(faces));
+    app.apply(Action::SelectTap);
+    app.box_back_unavailable(want.shelf, want.index);
+    faces.back_size = (0, 1);
+    app.set_box_faces(want.shelf, want.index, Some(faces));
+    app.apply(Action::SelectTap);
+    app.update(0.5);
+    assert!(face(&app, faces.front).is_some());
+    app.apply(Action::GbaDown(Btn::A));
+    app.apply(Action::GbaUp(Btn::A));
+    app.update(1.8);
+    app.apply(Action::GbaDown(Btn::Down));
+    app.update(1.0);
+    app.apply(Action::GbaDown(Btn::A));
+    app.update(1.0);
+    assert!(face(&app, faces.front).is_some());
+
+    let mut app = setup(root.path());
+    faces.back_size = (0, 0);
+    app.set_box_faces(want.shelf, want.index, Some(faces));
+    app.apply(Action::SelectTap);
+    app.update(1.0);
+    app.box_back_unavailable(want.shelf, want.index);
+    faces.back_size = (0, 1);
+    app.set_box_faces(want.shelf, want.index, Some(faces));
+    app.update(1.0);
+    assert!(face(&app, faces.front).is_some());
+}
+
 fn equal_pose(a: [[f32; 2]; 4], b: [[f32; 2]; 4]) {
     for (a, b) in a.iter().zip(b) {
         assert!((a[0] - b[0]).abs() < 0.001, "{a:?} != {b:?}");

@@ -398,7 +398,6 @@ impl App {
             || self.carousel_view != CarouselView::Boxes
             || self.core_picker.is_some()
             || self.edit.is_some()
-            || self.kid_locked()
         {
             return false;
         }
@@ -431,6 +430,12 @@ impl App {
                 }
                 match action {
                     Action::SelectTap => {
+                        if self
+                            .selected_box()
+                            .is_some_and(|(_, f, _)| f.back_size == (0, 1))
+                        {
+                            return true;
+                        }
                         let (center, scale, angle) = self.shelf().selected_box_pose(self.canvas());
                         self.play_held = None;
                         self.held_dir = None;
@@ -520,7 +525,13 @@ impl App {
                     true
                 }
                 Action::GbaDown(Btn::A) | Action::Insert | Action::SelectTap => {
-                    self.box_back = !self.box_back;
+                    if self.box_back
+                        || self
+                            .selected_box()
+                            .is_some_and(|(_, f, _)| f.back_size != (0, 1))
+                    {
+                        self.box_back = !self.box_back;
+                    }
                     true
                 }
                 Action::GbaDown(Btn::B) if zoom > 1.001 => {
@@ -660,7 +671,13 @@ impl App {
                     true
                 }
                 Action::GbaDown(Btn::A) | Action::Insert if item == BoxItem::Box => {
-                    self.box_back = !self.box_back;
+                    if self.box_back
+                        || self
+                            .selected_box()
+                            .is_some_and(|(_, f, _)| f.back_size != (0, 1))
+                    {
+                        self.box_back = !self.box_back;
+                    }
                     true
                 }
                 Action::GbaDown(Btn::Start) | Action::SelectTap if item == BoxItem::Box => true,
@@ -810,7 +827,8 @@ impl App {
                 | BoxScene::Open { .. }
                 | BoxScene::Closing { .. }
                 | BoxScene::PreparingClose { .. }
-        ) && faces.back == faces.front;
+        ) && faces.back == faces.front
+            && faces.back_size != (0, 1);
         let flap = matches!(
             self.box_scene,
             BoxScene::Opening { .. }
@@ -826,6 +844,18 @@ impl App {
 
     pub fn box_faces_at(&self, shelf: usize, index: usize) -> Option<slot_ui::BoxFaceTextures> {
         self.shelves.get(shelf)?.1.box_faces(index)
+    }
+
+    pub fn box_back_unavailable(&mut self, shelf: usize, index: usize) {
+        if shelf == self.shelf_at && index == self.shelf().index {
+            self.box_back = false;
+            if matches!(
+                self.box_scene,
+                BoxScene::FlippingBack { .. } | BoxScene::Back { .. }
+            ) {
+                self.box_scene = BoxScene::Carousel;
+            }
+        }
     }
 
     pub fn shed_box_faces(&mut self) -> Vec<TexId> {

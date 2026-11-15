@@ -59,6 +59,12 @@ cover and the last is the back cover. The remaining pages can be read in Open
 Box View. Pages are loaded as needed; a failed page load is logged and shown
 as a warning.
 
+Box artwork lives in `Boxes/<system>/` as `<game>-front.png` and
+`<game>-side.png`, with an optional `<game>-back.png`. Boxes without a back
+cannot be flipped unless a `<game>-texture.png` supplies one. A 1×1
+`<game>-flap.png` supplies the flap color; when absent, slot generates it
+from the back artwork when the flap is needed.
+
 ## Saves and states
 
 - Battery saves are `Saves/<system>/<game>.sav`.

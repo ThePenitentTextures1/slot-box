@@ -5208,15 +5208,32 @@ impl App {
         }
         let action = match self.kid_locked() {
             true => {
-                let at = match self.phase {
-                    Phase::Shelf => crate::kid::KidWhere::Shelf,
-                    Phase::Playing { .. } => crate::kid::KidWhere::Playing,
-                    _ => crate::kid::KidWhere::Other,
-                };
-                match crate::kid::allowed(at, self.state.kid_mode, action) {
-                    Some(Action::Eject) if self.single_cart() => return,
-                    Some(kept) => kept,
-                    None => return,
+                let box_navigation = self.on_shelf()
+                    && self.carousel_view == CarouselView::Boxes
+                    && self.selected_box().is_some()
+                    && match action {
+                        Action::SelectTap => {
+                            matches!(self.box_scene, BoxScene::Carousel | BoxScene::Back { .. })
+                        }
+                        Action::GbaDown(Btn::B | Btn::L1 | Btn::R1)
+                        | Action::GbaUp(Btn::B | Btn::L1 | Btn::R1) => {
+                            self.box_scene != BoxScene::Carousel
+                        }
+                        _ => false,
+                    };
+                if box_navigation {
+                    action
+                } else {
+                    let at = match self.phase {
+                        Phase::Shelf => crate::kid::KidWhere::Shelf,
+                        Phase::Playing { .. } => crate::kid::KidWhere::Playing,
+                        _ => crate::kid::KidWhere::Other,
+                    };
+                    match crate::kid::allowed(at, self.state.kid_mode, action) {
+                        Some(Action::Eject) if self.single_cart() => return,
+                        Some(kept) => kept,
+                        None => return,
+                    }
                 }
             }
             false => action,
@@ -10064,8 +10081,7 @@ impl App {
         }
         if self.now().saturating_sub(at) >= PLAY_HOLD_MS && !self.unwrap_seated() {
             let clean = !self.kid_locked() || !self.state.resume_insert;
-            if !self.kid_locked()
-                && self.carousel_view == CarouselView::Boxes
+            if self.carousel_view == CarouselView::Boxes
                 && self.box_scene == BoxScene::Carousel
                 && self.selected_box().is_some()
             {

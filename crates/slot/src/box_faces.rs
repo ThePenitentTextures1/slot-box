@@ -1,11 +1,12 @@
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 
 use slot_gfx::{Compositor, TexId};
-use slot_store::{box_art, box_art_file, BoxArtSource, Cart};
+use slot_store::{box_art, box_art_file, box_art_path, BoxArtSource, Cart};
 use slot_ui::{BoxFaceTextures, CartFace};
 
 use crate::app::{App, FaceWant};
@@ -191,6 +192,8 @@ impl BoxFaces {
             } else {
                 eprintln!("slot: box back: could not load {}", cart.stem);
                 self.failed_back.insert(key, cart.clone());
+                faces.back_size = (0, 1);
+                app.box_back_unavailable(shelf, index);
             }
         }
         if flap {
@@ -310,7 +313,7 @@ fn build(root: &Path, cart: &Cart) -> Option<BoxFaceArt> {
     let art = box_art(root, cart)?;
     let mut texture = art.source == BoxArtSource::Texture;
     let mut faces = if art.source == BoxArtSource::Texture {
-        load_texture_atlas(&art.back.path)
+        load_texture_atlas(&art.front.path)
     } else {
         let separate = (
             slot_ui::decode_png(&art.front.path),
@@ -440,8 +443,21 @@ fn load_details(
     back: bool,
     flap: bool,
 ) -> (Option<CartFace>, Option<CartFace>) {
-    let Some(path) = box_art_file(root, cart, if texture { "texture" } else { "back" }) else {
-        return (None, None);
+    let path = box_art_file(root, cart, if texture { "texture" } else { "back" });
+    let cached = if flap {
+        box_art_file(root, cart, "flap").and_then(|path| {
+            let Some((rgba, w, h)) = slot_ui::decode_png(&path) else {
+                eprintln!("slot: box flap: could not decode {}", path.display());
+                return None;
+            };
+            if (w, h) != (1, 1) {
+                eprintln!("slot: box flap: {} must be a 1x1 PNG", path.display());
+                return None;
+            }
+            flap_colour(rgba[..3].try_into().ok()?)
+        })
+    } else {
+        None
     };
     if back {
         let decode = |path: &Path, texture: bool| {
@@ -458,35 +474,50 @@ fn load_details(
                 }
             })
         };
-        let image = decode(&path, texture).or_else(|| {
-            if texture {
-                return None;
-            }
-            let atlas = box_art_file(root, cart, "texture")?;
-            decode(&atlas, true)
-        });
-        let flap_art = if flap {
-            image
-                .as_ref()
-                .and_then(|image| flap_face(&image.rgba, image.w, image.h))
+        let image = path
+            .as_deref()
+            .and_then(|path| decode(path, texture))
+            .or_else(|| {
+                if texture {
+                    return None;
+                }
+                let atlas = box_art_file(root, cart, "texture")?;
+                decode(&atlas, true)
+            });
+        let flap_art = if flap && cached.is_none() {
+            image.as_ref().and_then(|image| {
+                let color = back_colour(&image.rgba, image.w, image.h)?;
+                save_flap_colour(root, cart, color);
+                flap_colour(color)
+            })
         } else {
             None
         };
-        (image, flap_art)
+        (image, cached.or(flap_art))
     } else if flap {
-        let flap = flap_from_first_row(&path, texture).or_else(|| {
-            if texture {
-                return None;
-            }
-            flap_from_first_row(&box_art_file(root, cart, "texture")?, true)
+        let color = if cached.is_none() {
+            path.as_deref()
+                .and_then(|p| colour_from_first_row(p, texture))
+                .or_else(|| {
+                    if texture {
+                        return None;
+                    }
+                    colour_from_first_row(&box_art_file(root, cart, "texture")?, true)
+                })
+        } else {
+            None
+        };
+        let generated = color.and_then(|color| {
+            save_flap_colour(root, cart, color);
+            flap_colour(color)
         });
-        (None, flap)
+        (None, cached.or(generated))
     } else {
         (None, None)
     }
 }
 
-fn flap_from_first_row(path: &Path, texture: bool) -> Option<CartFace> {
+fn colour_from_first_row(path: &Path, texture: bool) -> Option<[u8; 3]> {
     let file = std::fs::File::open(path).ok()?;
     let mut decoder = png::Decoder::new(std::io::BufReader::new(file));
     decoder.set_transformations(png::Transformations::normalize_to_color8());
@@ -496,7 +527,7 @@ fn flap_from_first_row(path: &Path, texture: bool) -> Option<CartFace> {
     if info.interlaced || info.exif_metadata.is_some() {
         let (rgba, w, h) = slot_ui::decode_png(path)?;
         let width = if texture { h } else { w };
-        return flap_face(&rgba, width, h);
+        return back_colour(&rgba, width, h);
     }
     let width = if texture { info.height } else { info.width };
     if width == 0 || width > info.width {
@@ -513,16 +544,52 @@ fn flap_from_first_row(path: &Path, texture: bool) -> Option<CartFace> {
         png::ColorType::GrayscaleAlpha => [*bytes.get(x * 2)?; 3],
         png::ColorType::Indexed => return None,
     };
-    flap_colour(rgb)
+    Some(rgb)
 }
 
-fn flap_face(back: &[u8], width: u32, height: u32) -> Option<CartFace> {
+fn back_colour(back: &[u8], width: u32, height: u32) -> Option<[u8; 3]> {
     if width == 0 || height == 0 {
         return None;
     }
     let offset = (width as usize / 2).checked_mul(4)?;
-    let colour = back.get(offset..offset + 3)?.try_into().ok()?;
-    flap_colour(colour)
+    back.get(offset..offset + 3)?.try_into().ok()
+}
+
+fn save_flap_colour(root: &Path, cart: &Cart, colour: [u8; 3]) {
+    let path = box_art_path(root, cart, "flap");
+    if box_art_file(root, cart, "flap").is_some() {
+        return;
+    }
+    let mut bytes = Vec::new();
+    let encoded = (|| -> Result<(), png::EncodingError> {
+        let mut encoder = png::Encoder::new(&mut bytes, 1, 1);
+        encoder.set_color(png::ColorType::Rgb);
+        encoder.write_header()?.write_image_data(&colour)
+    })();
+    if let Err(e) = encoded {
+        eprintln!("slot: box flap: encoding {}: {e}", path.display());
+        return;
+    }
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+    {
+        Ok(mut file) => {
+            if let Err(e) = file.write_all(&bytes) {
+                eprintln!("slot: box flap: writing {}: {e}", path.display());
+                drop(file);
+                if let Err(e) = std::fs::remove_file(&path) {
+                    eprintln!(
+                        "slot: box flap: removing incomplete {}: {e}",
+                        path.display()
+                    );
+                }
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => eprintln!("slot: box flap: creating {}: {e}", path.display()),
+    }
 }
 
 fn flap_colour(colour: [u8; 3]) -> Option<CartFace> {
@@ -548,7 +615,7 @@ mod flap_tests {
         let mut back = vec![0; 3 * 2 * 4];
         back[4..8].copy_from_slice(&[42, 87, 136, 255]);
         back[12..16].copy_from_slice(&[1, 2, 3, 255]);
-        let flap = flap_face(&back, 3, 2).unwrap();
+        let flap = flap_colour(back_colour(&back, 3, 2).unwrap()).unwrap();
         let pixel = |x: usize, y: usize| &flap.rgba[(y * flap.w as usize + x) * 4..][..4];
         assert_eq!(pixel(350, 10), &[42, 87, 136, 255]);
         assert_eq!(pixel(350, 150), &[255, 255, 255, 255]);
@@ -571,7 +638,6 @@ mod flap_tests {
         };
         write("Game-front.png", 4, 3, &vec![255; 4 * 3 * 4]);
         write("Game-side.png", 2, 3, &vec![10; 2 * 3 * 4]);
-        std::fs::write(boxes.join("Game-back.png"), b"not a PNG").unwrap();
         let cart = Cart {
             platform: slot_store::Platform::Gba,
             stem: "Game".into(),
@@ -590,6 +656,8 @@ mod flap_tests {
         write("Game-back.png", 4, 3, &back);
         let (back_art, flap) = load_details(dir.path(), &cart, false, true, true);
         assert_eq!(back_art.unwrap().rgba, back);
+        let (pixel, w, h) = slot_ui::decode_png(&boxes.join("Game-flap.png")).unwrap();
+        assert_eq!((w, h, &pixel[..3]), (1, 1, &[12, 34, 56][..]));
         let flap = flap.unwrap();
         let offset = (10 * flap.w as usize + 350) * 4;
         assert_eq!(&flap.rgba[offset..offset + 3], &[12, 34, 56]);
@@ -617,7 +685,25 @@ mod flap_tests {
         write("Game-texture.png", 7, 3, &atlas);
         let (back_art, flap) = load_details(dir.path(), &cart, false, true, true);
         assert_eq!(&back_art.unwrap().rgba[4..7], &[21, 43, 65]);
+        assert_eq!(&flap.unwrap().rgba[offset..offset + 3], &[12, 34, 56]);
+        std::fs::remove_file(boxes.join("Game-flap.png")).unwrap();
+        let (_, flap) = load_details(dir.path(), &cart, false, true, true);
         assert_eq!(&flap.unwrap().rgba[offset..offset + 3], &[21, 43, 65]);
+
+        std::fs::remove_file(boxes.join("Game-back.png")).unwrap();
+        std::fs::remove_file(boxes.join("Game-texture.png")).unwrap();
+        let (back_art, flap) = load_details(dir.path(), &cart, false, true, true);
+        assert!(back_art.is_none());
+        assert_eq!(&flap.unwrap().rgba[offset..offset + 3], &[21, 43, 65]);
+
+        std::fs::write(boxes.join("Game-flap.png"), b"broken").unwrap();
+        write("Game-back.png", 4, 3, &back);
+        let (_, flap) = load_details(dir.path(), &cart, false, false, true);
+        assert!(flap.is_some());
+        assert_eq!(
+            std::fs::read(boxes.join("Game-flap.png")).unwrap(),
+            b"broken"
+        );
     }
 
     #[test]
@@ -638,7 +724,7 @@ mod flap_tests {
                 .write_image_data(&pixels)
                 .unwrap();
         }
-        let flap = flap_from_first_row(&path, true).unwrap();
+        let flap = flap_colour(colour_from_first_row(&path, true).unwrap()).unwrap();
         let offset = (10 * flap.w as usize + 350) * 4;
         assert_eq!(&flap.rgba[offset..offset + 3], &[21, 43, 65]);
     }

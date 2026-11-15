@@ -63,7 +63,8 @@ return. With the cartridge selected, the
 cartridge controls above apply. Open the box to change the emulator or use
 Cartridge Studio. Games without box art retain the regular cartridge controls
 directly on the carousel.
-While Kid Mode is locked, boxed games use the regular cartridge launch controls.
+While Kid Mode is locked, boxes and manuals can still be inspected, but
+Cartridge Studio, the emulator picker and settings remain locked.
 
 With the manual selected, press <kbd>A</kbd> to pick it up. Hold
 <kbd>Left</kbd> or <kbd>Right</kbd> to pan across a spread. Double-tap a

@@ -32,7 +32,7 @@ pub struct BoxArt {
     pub source: BoxArtSource,
     pub front: BoxArtImage,
     pub side: BoxArtImage,
-    pub back: BoxArtImage,
+    pub back: Option<BoxArtImage>,
 }
 
 impl BoxArt {
@@ -88,8 +88,8 @@ fn texture_image(path: PathBuf, panel: TexturePanel) -> BoxArtImage {
 
 /// Resolves a game's box art from Boxes/<platform>/<rom-stem>-*.png.
 ///
-/// A complete set of separate front/side/back images takes precedence. If
-/// that set is incomplete, a single texture image is used when present. The
+/// Separate front and side images take precedence, even without a back. If
+/// either is missing, a single texture image is used when present. The
 /// returned texture panels are ordered back, side, front from left to right.
 /// Missing art returns None, allowing the caller to show the loose cartridge.
 pub fn box_art(root: &Path, cart: &Cart) -> Option<BoxArt> {
@@ -97,14 +97,14 @@ pub fn box_art(root: &Path, cart: &Cart) -> Option<BoxArt> {
     let side = box_art_file(root, cart, "side");
     let back = box_art_file(root, cart, "back");
 
-    if let (Some(front), Some(side), Some(back)) = (front, side, back) {
+    if let (Some(front), Some(side)) = (front, side) {
         return Some(BoxArt {
             platform: cart.platform,
             stem: cart.stem.clone(),
             source: BoxArtSource::Separate,
             front: separate_image(front),
             side: separate_image(side),
-            back: separate_image(back),
+            back: back.map(separate_image),
         });
     }
 
@@ -115,6 +115,6 @@ pub fn box_art(root: &Path, cart: &Cart) -> Option<BoxArt> {
         source: BoxArtSource::Texture,
         front: texture_image(texture.clone(), TexturePanel::Front),
         side: texture_image(texture.clone(), TexturePanel::Side),
-        back: texture_image(texture, TexturePanel::Back),
+        back: Some(texture_image(texture, TexturePanel::Back)),
     })
 }
