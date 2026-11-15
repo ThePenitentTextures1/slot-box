@@ -59,16 +59,20 @@ pub struct BoxFaces {
     building: Building,
     asked: Vec<FaceWant>,
     free: Vec<TexId>,
+    details: Sender<(Cart, bool, bool, bool)>,
+    detailed: Receiver<(Option<CartFace>, Option<CartFace>)>,
+    failed_back: HashMap<Key, Cart>,
+    failed_flap: HashMap<Key, Cart>,
+    sources: HashMap<PathBuf, bool>,
 }
 
 struct BoxFaceArt {
     front: CartFace,
     side: CartFace,
-    back: CartFace,
-    flap: CartFace,
     pivot: [f32; 2],
     front_center: [f32; 2],
     japanese: bool,
+    texture: bool,
 }
 
 impl BoxFaces {
@@ -90,12 +94,33 @@ impl BoxFaces {
                 eprintln!("slot: box faces: worker thread failed to start: {e}");
             }
         }
+        let (details, jobs) = mpsc::channel::<(Cart, bool, bool, bool)>();
+        let (results, detailed) = mpsc::channel();
+        let detail_root = root.clone();
+        if let Err(e) = thread::Builder::new()
+            .name("slot-box-details".into())
+            .spawn(move || {
+                while let Ok((cart, texture, back, flap)) = jobs.recv() {
+                    let result = load_details(&detail_root, &cart, texture, back, flap);
+                    if results.send(result).is_err() {
+                        break;
+                    }
+                }
+            })
+        {
+            eprintln!("slot: box details: worker thread failed to start: {e}");
+        }
         Self {
             queue,
             built,
             building: Building::default(),
             asked: Vec::new(),
             free: Vec::new(),
+            details,
+            detailed,
+            failed_back: HashMap::new(),
+            failed_flap: HashMap::new(),
+            sources: HashMap::new(),
         }
     }
 
@@ -124,6 +149,60 @@ impl BoxFaces {
             waiting.retain(|pending| *pending != key);
             self.place(app, compositor, key, art);
         }
+        self.sync_details(app, compositor);
+    }
+
+    fn sync_details(&mut self, app: &mut App, compositor: &mut Compositor) {
+        let Some((shelf, index, back, flap)) = app.box_detail_want() else {
+            return;
+        };
+        let key = (shelf, index);
+        let Some(cart) = app.face_cart(shelf, index).cloned() else {
+            return;
+        };
+        let back = back && self.failed_back.get(&key) != Some(&cart);
+        let flap = flap && self.failed_flap.get(&key) != Some(&cart);
+        if !back && !flap {
+            return;
+        }
+        let Some(&texture) = self.sources.get(&cart.rom) else {
+            return;
+        };
+        if self
+            .details
+            .send((cart.clone(), texture, back, flap))
+            .is_err()
+        {
+            eprintln!("slot: box details: worker unavailable");
+            return;
+        }
+        let Ok((back_art, flap_art)) = self.detailed.recv() else {
+            eprintln!("slot: box details: worker stopped");
+            return;
+        };
+        let Some(mut faces) = app.box_faces_at(shelf, index) else {
+            return;
+        };
+        if back {
+            if let Some(art) = back_art {
+                faces.back = self.texture(compositor, &art);
+                faces.back_size = (art.w, art.h);
+                self.failed_back.remove(&key);
+            } else {
+                eprintln!("slot: box back: could not load {}", cart.stem);
+                self.failed_back.insert(key, cart.clone());
+            }
+        }
+        if flap {
+            if let Some(art) = flap_art {
+                faces.flap = Some(self.texture(compositor, &art));
+                self.failed_flap.remove(&key);
+            } else {
+                eprintln!("slot: box flap: could not load {}", cart.stem);
+                self.failed_flap.insert(key, cart);
+            }
+        }
+        app.set_box_faces(shelf, index, Some(faces));
     }
 
     fn requeue(&mut self, app: &App, wants: &[FaceWant]) {
@@ -161,30 +240,37 @@ impl BoxFaces {
         art: Option<BoxFaceArt>,
     ) {
         self.asked.retain(|want| (want.shelf, want.index) != key);
-        let matches_cart = self.building.carts.get(&key) == app.face_cart(key.0, key.1);
+        let building_cart = self.building.carts.get(&key).cloned();
+        let matches_cart = building_cart.as_ref() == app.face_cart(key.0, key.1);
         if !self.building.finish(key) || !matches_cart {
             return;
         }
+        self.failed_back.remove(&key);
+        self.failed_flap.remove(&key);
         let faces = art.map(|art| {
+            if let Some(cart) = building_cart {
+                self.sources.insert(cart.rom, art.texture);
+            }
             let front = self.texture(compositor, &art.front);
             let side = self.texture(compositor, &art.side);
-            let back = self.texture(compositor, &art.back);
-            let flap = self.texture(compositor, &art.flap);
             BoxFaceTextures {
                 front,
                 side,
-                back,
-                flap: Some(flap),
+                back: front,
+                flap: None,
                 front_size: (art.front.w, art.front.h),
                 side_size: (art.side.w, art.side.h),
-                back_size: (art.back.w, art.back.h),
+                back_size: (0, 0),
                 japanese: art.japanese,
                 pivot: art.pivot,
                 front_center: art.front_center,
             }
         });
         if let Some(old) = app.set_box_faces(key.0, key.1, faces) {
-            self.free.extend([old.front, old.side, old.back]);
+            self.free.extend([old.front, old.side]);
+            if old.back != old.front {
+                self.free.push(old.back);
+            }
             self.free.extend(old.flap);
         }
     }
@@ -222,16 +308,16 @@ fn work(queue: &Shared, outbox: &Sender<(Key, Option<BoxFaceArt>)>, root: &Path)
 
 fn build(root: &Path, cart: &Cart) -> Option<BoxFaceArt> {
     let art = box_art(root, cart)?;
+    let mut texture = art.source == BoxArtSource::Texture;
     let mut faces = if art.source == BoxArtSource::Texture {
         load_texture_atlas(&art.back.path)
     } else {
         let separate = (
             slot_ui::decode_png(&art.front.path),
             slot_ui::decode_png(&art.side.path),
-            slot_ui::decode_png(&art.back.path),
         );
-        if let (Some(front), Some(side), Some(back)) = separate {
-            assemble(front, side, back)
+        if let (Some(front), Some(side)) = separate {
+            assemble(front, side)
         } else {
             None
         }
@@ -239,12 +325,14 @@ fn build(root: &Path, cart: &Cart) -> Option<BoxFaceArt> {
 
     if faces.is_none() {
         // A corrupt or unreadable separate set does not hide a usable atlas.
-        let texture = box_art_file(root, cart, "texture")?;
-        faces = load_texture_atlas(&texture);
+        let texture_path = box_art_file(root, cart, "texture")?;
+        faces = load_texture_atlas(&texture_path);
+        texture = true;
     }
 
     let mut faces = faces?;
     faces.japanese = is_japanese_release(cart);
+    faces.texture = texture;
     Some(faces)
 }
 
@@ -287,15 +375,13 @@ fn is_japanese_stem(stem: &str) -> bool {
 fn assemble(
     (front, fw, fh): (Vec<u8>, u32, u32),
     (side, sw, sh): (Vec<u8>, u32, u32),
-    (back, bw, bh): (Vec<u8>, u32, u32),
 ) -> Option<BoxFaceArt> {
-    if fw == 0 || fh == 0 || sw == 0 || sh == 0 || bw == 0 || bh == 0 {
+    if fw == 0 || fh == 0 || sw == 0 || sh == 0 {
         return None;
     }
     let scale = fh as f32;
-    let pivot_x = bw as f32 * scale / bh as f32 + sw as f32 * scale / sh as f32;
+    let pivot_x = fw as f32 + sw as f32 * scale / sh as f32;
     let front_width = fw as f32 * scale / fh as f32;
-    let flap = flap_face(&back, bw, bh)?;
     Some(BoxFaceArt {
         front: CartFace {
             rgba: front,
@@ -307,15 +393,10 @@ fn assemble(
             w: sw,
             h: sh,
         },
-        back: CartFace {
-            rgba: back,
-            w: bw,
-            h: bh,
-        },
-        flap,
         pivot: [pivot_x, fh as f32 / 2.0],
         front_center: [pivot_x + front_width / 2.0, fh as f32 / 2.0],
         japanese: false,
+        texture: false,
     })
 }
 
@@ -328,11 +409,9 @@ fn load_texture_atlas(path: &Path) -> Option<BoxFaceArt> {
     if side_w == 0 {
         return None;
     }
-    let back = crop(&rgba, w, h, 0, face_w)?;
     let side = crop(&rgba, w, h, face_w, side_w)?;
     let front_x = face_w.checked_add(side_w)?;
     let front = crop(&rgba, w, h, front_x, face_w)?;
-    let flap = flap_face(&back, face_w, h)?;
     Some(BoxFaceArt {
         front: CartFace {
             rgba: front,
@@ -344,19 +423,97 @@ fn load_texture_atlas(path: &Path) -> Option<BoxFaceArt> {
             w: side_w,
             h,
         },
-        back: CartFace {
-            rgba: back,
-            w: face_w,
-            h,
-        },
-        flap,
         pivot: [(face_w + side_w) as f32, h as f32 / 2.0],
         front_center: [
             (face_w + side_w) as f32 + face_w as f32 / 2.0,
             h as f32 / 2.0,
         ],
         japanese: false,
+        texture: true,
     })
+}
+
+fn load_details(
+    root: &Path,
+    cart: &Cart,
+    texture: bool,
+    back: bool,
+    flap: bool,
+) -> (Option<CartFace>, Option<CartFace>) {
+    let Some(path) = box_art_file(root, cart, if texture { "texture" } else { "back" }) else {
+        return (None, None);
+    };
+    if back {
+        let decode = |path: &Path, texture: bool| {
+            slot_ui::decode_png(path).and_then(|(rgba, w, h)| {
+                if texture {
+                    let pixels = crop(&rgba, w, h, 0, h)?;
+                    Some(CartFace {
+                        rgba: pixels,
+                        w: h,
+                        h,
+                    })
+                } else {
+                    Some(CartFace { rgba, w, h })
+                }
+            })
+        };
+        let image = decode(&path, texture).or_else(|| {
+            if texture {
+                return None;
+            }
+            let atlas = box_art_file(root, cart, "texture")?;
+            decode(&atlas, true)
+        });
+        let flap_art = if flap {
+            image
+                .as_ref()
+                .and_then(|image| flap_face(&image.rgba, image.w, image.h))
+        } else {
+            None
+        };
+        (image, flap_art)
+    } else if flap {
+        let flap = flap_from_first_row(&path, texture).or_else(|| {
+            if texture {
+                return None;
+            }
+            flap_from_first_row(&box_art_file(root, cart, "texture")?, true)
+        });
+        (None, flap)
+    } else {
+        (None, None)
+    }
+}
+
+fn flap_from_first_row(path: &Path, texture: bool) -> Option<CartFace> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut decoder = png::Decoder::new(std::io::BufReader::new(file));
+    decoder.set_transformations(png::Transformations::normalize_to_color8());
+    decoder.set_limits(png::Limits { bytes: 64 << 20 });
+    let mut reader = decoder.read_info().ok()?;
+    let info = reader.info();
+    if info.interlaced || info.exif_metadata.is_some() {
+        let (rgba, w, h) = slot_ui::decode_png(path)?;
+        let width = if texture { h } else { w };
+        return flap_face(&rgba, width, h);
+    }
+    let width = if texture { info.height } else { info.width };
+    if width == 0 || width > info.width {
+        return None;
+    }
+    let color = reader.output_color_type().0;
+    let row = reader.next_row().ok()??;
+    let bytes = row.data();
+    let x = width as usize / 2;
+    let rgb = match color {
+        png::ColorType::Rgb => bytes.get(x * 3..x * 3 + 3)?.try_into().ok()?,
+        png::ColorType::Rgba => bytes.get(x * 4..x * 4 + 3)?.try_into().ok()?,
+        png::ColorType::Grayscale => [*bytes.get(x)?; 3],
+        png::ColorType::GrayscaleAlpha => [*bytes.get(x * 2)?; 3],
+        png::ColorType::Indexed => return None,
+    };
+    flap_colour(rgb)
 }
 
 fn flap_face(back: &[u8], width: u32, height: u32) -> Option<CartFace> {
@@ -364,7 +521,11 @@ fn flap_face(back: &[u8], width: u32, height: u32) -> Option<CartFace> {
         return None;
     }
     let offset = (width as usize / 2).checked_mul(4)?;
-    let colour = back.get(offset..offset + 3)?;
+    let colour = back.get(offset..offset + 3)?.try_into().ok()?;
+    flap_colour(colour)
+}
+
+fn flap_colour(colour: [u8; 3]) -> Option<CartFace> {
     let (mut rgba, w, h) = slot_ui::decode_png_bytes(include_bytes!("../assets/box_flap.png"))
         .or_else(|| {
             eprintln!("slot: box flap: could not decode embedded artwork");
@@ -372,7 +533,7 @@ fn flap_face(back: &[u8], width: u32, height: u32) -> Option<CartFace> {
         })?;
     for pixel in rgba.chunks_exact_mut(4) {
         if pixel[1] > 200 && pixel[0] < 40 && pixel[2] < 40 {
-            pixel[..3].copy_from_slice(colour);
+            pixel[..3].copy_from_slice(&colour);
         }
     }
     Some(CartFace { rgba, w, h })
@@ -394,14 +555,69 @@ mod flap_tests {
     }
 
     #[test]
-    fn separate_art_samples_the_back_not_the_spine() {
-        let front = (vec![255; 4 * 3 * 4], 4, 3);
-        let side = (vec![10; 2 * 3 * 4], 2, 3);
+    fn separate_art_defers_the_back_and_samples_it_when_opened() {
+        let dir = tempfile::tempdir().unwrap();
+        let boxes = dir.path().join("Boxes/GBA");
+        std::fs::create_dir_all(&boxes).unwrap();
+        let write = |name: &str, w, h, pixels: &[u8]| {
+            let file = std::fs::File::create(boxes.join(name)).unwrap();
+            let mut encoder = png::Encoder::new(file, w, h);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(pixels)
+                .unwrap();
+        };
+        write("Game-front.png", 4, 3, &vec![255; 4 * 3 * 4]);
+        write("Game-side.png", 2, 3, &vec![10; 2 * 3 * 4]);
+        std::fs::write(boxes.join("Game-back.png"), b"not a PNG").unwrap();
+        let cart = Cart {
+            platform: slot_store::Platform::Gba,
+            stem: "Game".into(),
+            rom: dir.path().join("Game.gba"),
+            label: None,
+            title: "Game".into(),
+            code: String::new(),
+            shell: None,
+        };
+        assert!(build(dir.path(), &cart).is_some());
+        assert!(load_details(dir.path(), &cart, false, true, true)
+            .0
+            .is_none());
         let mut back = vec![0; 4 * 3 * 4];
         back[8..12].copy_from_slice(&[12, 34, 56, 255]);
-        let art = assemble(front, side, (back, 4, 3)).unwrap();
-        let offset = (10 * art.flap.w as usize + 350) * 4;
-        assert_eq!(&art.flap.rgba[offset..offset + 3], &[12, 34, 56]);
+        write("Game-back.png", 4, 3, &back);
+        let (back_art, flap) = load_details(dir.path(), &cart, false, true, true);
+        assert_eq!(back_art.unwrap().rgba, back);
+        let flap = flap.unwrap();
+        let offset = (10 * flap.w as usize + 350) * 4;
+        assert_eq!(&flap.rgba[offset..offset + 3], &[12, 34, 56]);
+        let worker = BoxFaces::spawn(dir.path().to_path_buf());
+        worker
+            .details
+            .send((cart.clone(), false, true, true))
+            .unwrap();
+        let (worker_back, worker_flap) = worker
+            .detailed
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(worker_back.unwrap().rgba, back);
+        assert_eq!(
+            &worker_flap.unwrap().rgba[offset..offset + 3],
+            &[12, 34, 56]
+        );
+        let (unloaded, quick_flap) = load_details(dir.path(), &cart, false, false, true);
+        assert!(unloaded.is_none());
+        assert_eq!(&quick_flap.unwrap().rgba[offset..offset + 3], &[12, 34, 56]);
+
+        std::fs::write(boxes.join("Game-back.png"), b"broken").unwrap();
+        let mut atlas = vec![0; 7 * 3 * 4];
+        atlas[4..8].copy_from_slice(&[21, 43, 65, 255]);
+        write("Game-texture.png", 7, 3, &atlas);
+        let (back_art, flap) = load_details(dir.path(), &cart, false, true, true);
+        assert_eq!(&back_art.unwrap().rgba[4..7], &[21, 43, 65]);
+        assert_eq!(&flap.unwrap().rgba[offset..offset + 3], &[21, 43, 65]);
     }
 
     #[test]
@@ -422,9 +638,9 @@ mod flap_tests {
                 .write_image_data(&pixels)
                 .unwrap();
         }
-        let art = load_texture_atlas(&path).unwrap();
-        let offset = (10 * art.flap.w as usize + 350) * 4;
-        assert_eq!(&art.flap.rgba[offset..offset + 3], &[21, 43, 65]);
+        let flap = flap_from_first_row(&path, true).unwrap();
+        let offset = (10 * flap.w as usize + 350) * 4;
+        assert_eq!(&flap.rgba[offset..offset + 3], &[21, 43, 65]);
     }
 }
 

@@ -90,6 +90,15 @@ fn rotation_endpoints_show_the_expected_face_at_full_size() {
 }
 
 #[test]
+fn an_unloaded_back_is_not_drawn_as_the_front() {
+    let mut tex = textures(0);
+    tex.back = tex.front;
+    let mut out = Vec::new();
+    draw_rotated_box(tex, (200.0, 180.0, 40.0), PI, [300.0, 200.0], 1.0, &mut out);
+    assert!(out.is_empty());
+}
+
+#[test]
 fn faces_turn_away_at_the_perspective_adjusted_angle() {
     let tex = textures(0);
     for size in [(200.0_f32, 180.0_f32, 40.0_f32), (140.0, 220.0, 30.0)] {

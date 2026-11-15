@@ -108,6 +108,7 @@ pub fn repeat_gap(fired: usize) -> Millis {
 pub struct BoxFaceTextures {
     pub front: TexId,
     pub side: TexId,
+    /// Equal to `front` until the back texture is loaded.
     pub back: TexId,
     pub flap: Option<TexId>,
     pub front_size: (u32, u32),
@@ -203,9 +204,14 @@ impl Shelf {
             .chain(self.interiors.drain(..))
             .flatten()
             .chain(self.box_faces.drain(..).flatten().flat_map(|b| {
-                [Some(b.front), Some(b.side), Some(b.back), b.flap]
-                    .into_iter()
-                    .flatten()
+                [
+                    Some(b.front),
+                    Some(b.side),
+                    (b.back != b.front).then_some(b.back),
+                    b.flap,
+                ]
+                .into_iter()
+                .flatten()
             }))
             .collect();
         self.faces = faces;

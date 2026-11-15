@@ -111,6 +111,36 @@ fn manual_cover_is_requested_only_for_open_box_not_carousel_or_inspection() {
     assert_eq!(app.manual_cover_want().unwrap().stem, "Alpha");
 }
 
+#[test]
+fn box_details_are_requested_for_opening_and_inspection_not_the_carousel() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    write_carousel_view(root.path(), CarouselView::Boxes).unwrap();
+    let initial = common::boot(root.path());
+    let want = initial.box_face_wants()[0];
+    let key = (want.shelf, want.index);
+    let prepare = || {
+        let mut app = setup(root.path());
+        let mut faces = textures(1000);
+        faces.back = faces.front;
+        faces.flap = None;
+        app.set_box_faces(key.0, key.1, Some(faces));
+        app
+    };
+    let mut app = prepare();
+    assert!(app.box_detail_want().is_none());
+    app.apply(Action::SelectTap);
+    assert_eq!(app.box_detail_want(), Some((key.0, key.1, true, false)));
+
+    let mut app = prepare();
+    app.apply(Action::GbaDown(Btn::A));
+    app.apply(Action::GbaUp(Btn::A));
+    assert_eq!(app.box_detail_want(), Some((key.0, key.1, true, true)));
+
+    let mut app = prepare();
+    app.apply(Action::GbaDown(Btn::Start));
+    assert_eq!(app.box_detail_want(), Some((key.0, key.1, false, true)));
+}
+
 fn equal_pose(a: [[f32; 2]; 4], b: [[f32; 2]; 4]) {
     for (a, b) in a.iter().zip(b) {
         assert!((a[0] - b[0]).abs() < 0.001, "{a:?} != {b:?}");

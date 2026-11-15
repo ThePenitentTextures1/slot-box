@@ -799,6 +799,35 @@ impl App {
             .collect()
     }
 
+    pub fn box_detail_want(&self) -> Option<(usize, usize, bool, bool)> {
+        let (_, faces, _) = self.selected_box()?;
+        let back = matches!(
+            self.box_scene,
+            BoxScene::FlippingBack { .. }
+                | BoxScene::Back { .. }
+                | BoxScene::FlippingFront { .. }
+                | BoxScene::Opening { .. }
+                | BoxScene::Open { .. }
+                | BoxScene::Closing { .. }
+                | BoxScene::PreparingClose { .. }
+        ) && faces.back == faces.front;
+        let flap = matches!(
+            self.box_scene,
+            BoxScene::Opening { .. }
+                | BoxScene::QuickOpening { .. }
+                | BoxScene::QuickLaunched
+                | BoxScene::QuickClosing { .. }
+                | BoxScene::Open { .. }
+                | BoxScene::PreparingClose { .. }
+                | BoxScene::Closing { .. }
+        ) && faces.flap.is_none();
+        (back || flap).then_some((self.shelf_at, self.shelf().index, back, flap))
+    }
+
+    pub fn box_faces_at(&self, shelf: usize, index: usize) -> Option<slot_ui::BoxFaceTextures> {
+        self.shelves.get(shelf)?.1.box_faces(index)
+    }
+
     pub fn shed_box_faces(&mut self) -> Vec<TexId> {
         let neighbours = self.neighbour_shelves();
         let radius = Shelf::box_visible_radius(self.canvas());
@@ -816,7 +845,10 @@ impl App {
             for i in 0..shelf.carts.len() {
                 if !keep.contains(&i) {
                     if let Some(faces) = shelf.take_box_faces(i) {
-                        shed.extend([faces.front, faces.side, faces.back]);
+                        shed.extend([faces.front, faces.side]);
+                        if faces.back != faces.front {
+                            shed.push(faces.back);
+                        }
                         shed.extend(faces.flap);
                     }
                 }

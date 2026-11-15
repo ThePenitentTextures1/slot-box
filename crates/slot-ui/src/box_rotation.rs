@@ -119,7 +119,7 @@ fn faces(textures: BoxFaceTextures, p: &Projection) -> Vec<Face> {
     if edges.front_visible() {
         result.push(quad((left, front), (right, front), textures.front));
     }
-    if edges.back_visible() {
+    if edges.back_visible() && textures.back != textures.front {
         // Back art is read from the free edge toward the spine.
         result.push(quad((right, back), (left, back), textures.back));
     }
