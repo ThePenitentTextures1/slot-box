@@ -20,20 +20,57 @@ fn textures(id: usize) -> BoxFaceTextures {
     }
 }
 
+fn selected_cart(app: &App) -> slot_store::Cart {
+    app.carts()
+        .find(|cart| Some(cart.stem.as_str()) == app.selected_stem())
+        .unwrap()
+        .clone()
+}
+
 fn setup(root: &std::path::Path) -> App {
     write_carousel_view(root, CarouselView::Boxes).unwrap();
     let mut app = common::boot(root);
-    for want in app.box_face_wants() {
+    let wants = app.box_face_wants();
+    for want in &wants {
         app.set_box_faces(
             want.shelf,
             want.index,
             Some(textures(1000 + want.index * 3)),
         );
     }
-    for want in app.face_wants() {
+    for want in wants {
         app.set_cart_face(want.shelf, want.index, TexId::from_raw(2000 + want.index));
     }
     app
+}
+
+#[test]
+fn carousel_requests_only_unboxed_cart_faces_until_a_box_is_opened() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    write_carousel_view(root.path(), CarouselView::Boxes).unwrap();
+    let mut app = common::boot(root.path());
+    let wants = app.box_face_wants();
+    assert_eq!(wants.len(), 2);
+    app.set_box_faces(wants[0].shelf, wants[0].index, Some(textures(1000)));
+    app.set_box_faces(wants[1].shelf, wants[1].index, None);
+    let cart_wants = app.face_wants();
+    assert!(!cart_wants.iter().any(|w| w.index == wants[0].index));
+    assert!(cart_wants.iter().any(|w| w.index == wants[1].index));
+    app.apply(Action::SelectTap);
+    assert!(!app.face_wants().iter().any(|w| w.index == wants[0].index));
+
+    let mut app = common::boot(root.path());
+    app.set_box_faces(wants[0].shelf, wants[0].index, Some(textures(1000)));
+    app.set_box_faces(wants[1].shelf, wants[1].index, None);
+    app.apply(Action::GbaDown(Btn::A));
+    app.apply(Action::GbaUp(Btn::A));
+    assert!(app.face_wants().iter().any(|w| w.index == wants[0].index));
+
+    let mut app = common::boot(root.path());
+    app.set_box_faces(wants[0].shelf, wants[0].index, Some(textures(1000)));
+    app.apply(Action::GbaDown(Btn::Start));
+    assert!(app.face_wants().iter().any(|w| w.index == wants[0].index));
+    assert!(app.manual_cover_want().is_none());
 }
 
 fn face(app: &App, tex: TexId) -> Option<[[f32; 2]; 4]> {
@@ -54,6 +91,24 @@ fn face(app: &App, tex: TexId) -> Option<[[f32; 2]; 4]> {
                 |q: &[[f32; 2]; 4]| ((q[0][0] + q[1][0]) / 2.0 - app.canvas().w / 2.0).abs();
             distance(a).total_cmp(&distance(b))
         })
+}
+
+#[test]
+fn manual_cover_is_requested_only_for_open_box_not_carousel_or_inspection() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    let mut app = setup(root.path());
+    assert!(app.manual_cover_want().is_none());
+    app.apply(Action::SelectTap);
+    for _ in 0..5 {
+        app.update(0.1);
+    }
+    assert!(app.manual_cover_want().is_none());
+    let mut app = setup(root.path());
+    app.apply(Action::GbaDown(Btn::A));
+    app.apply(Action::GbaUp(Btn::A));
+    assert_eq!(app.manual_cover_want().unwrap().stem, "Alpha");
+    app.update(2.0);
+    assert_eq!(app.manual_cover_want().unwrap().stem, "Alpha");
 }
 
 fn equal_pose(a: [[f32; 2]; 4], b: [[f32; 2]; 4]) {
@@ -689,7 +744,7 @@ fn quick_launch_and_eject_skip_the_manual_and_return_to_the_carousel() {
         let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
         let mut app = setup(root.path());
         let manual = TexId::from_raw(9000);
-        app.set_manual_cover(Some((app.manual_cover_want().unwrap(), manual)));
+        app.set_manual_cover(Some((selected_cart(&app), manual)));
         let carousel = face(&app, textures(1000).front).unwrap();
         if hold {
             app.apply(Action::GbaDown(Btn::A));
@@ -787,7 +842,7 @@ fn normal_open_box_eject_returns_to_the_contents_with_the_manual() {
     let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
     let mut app = setup(root.path());
     let manual = TexId::from_raw(9000);
-    app.set_manual_cover(Some((app.manual_cover_want().unwrap(), manual)));
+    app.set_manual_cover(Some((selected_cart(&app), manual)));
     open(&mut app);
     common::through(&mut app, Btn::A);
     assert!(matches!(app.phase(), Phase::Inserting { .. }));
@@ -812,7 +867,7 @@ fn interrupted_quick_launches_also_return_to_the_carousel_without_the_manual() {
         let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
         let mut app = setup(root.path());
         let manual = TexId::from_raw(9000);
-        app.set_manual_cover(Some((app.manual_cover_want().unwrap(), manual)));
+        app.set_manual_cover(Some((selected_cart(&app), manual)));
         common::through(&mut app, Btn::Start);
         app.update(1.70);
         app.update(0.08);
@@ -1228,7 +1283,11 @@ fn vertical_open_box_preserves_scale_and_cartridge_geometry() {
 fn manual_cover_extracts_to_scale_and_can_be_selected_and_put_down() {
     let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
     let mut app = setup(root.path());
-    let cart = app.manual_cover_want().unwrap();
+    let cart = app
+        .carts()
+        .find(|cart| Some(cart.stem.as_str()) == app.selected_stem())
+        .unwrap()
+        .clone();
     let manual = TexId::from_raw(9000);
     app.set_manual_cover(Some((cart, manual)));
     app.set_manual_page_count(1);
@@ -1297,7 +1356,7 @@ fn manual_selection_takes_280ms_and_reader_pickup_starts_at_cover() {
     let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
     let mut app = setup(root.path());
     let cover = TexId::from_raw(9000);
-    app.set_manual_cover(Some((app.manual_cover_want().unwrap(), cover)));
+    app.set_manual_cover(Some((selected_cart(&app), cover)));
     app.set_manual_page_count(4);
     open(&mut app);
     app.apply(Action::GbaDown(Btn::Up));
@@ -1328,7 +1387,7 @@ fn manual_reads_pages_turns_zoom_pans_and_puts_down() {
     let mut app = setup(root.path());
     let cover = TexId::from_raw(9000);
     let pages: Vec<_> = (1..6).map(|i| (i, TexId::from_raw(9000 + i))).collect();
-    app.set_manual_cover(Some((app.manual_cover_want().unwrap(), cover)));
+    app.set_manual_cover(Some((selected_cart(&app), cover)));
     app.set_manual_page_count(6);
     app.set_manual_page_textures(pages.clone());
     app.set_left_stick(true);
@@ -1426,7 +1485,7 @@ fn cover_turn_and_closing_spreads_are_continuous() {
     let mut app = setup(root.path());
     let cover = TexId::from_raw(9000);
     let pages: Vec<_> = (1..5).map(|i| (i, TexId::from_raw(9000 + i))).collect();
-    app.set_manual_cover(Some((app.manual_cover_want().unwrap(), cover)));
+    app.set_manual_cover(Some((selected_cart(&app), cover)));
     app.set_manual_page_count(5);
     app.set_manual_page_textures(pages.clone());
     open(&mut app);
@@ -1492,7 +1551,7 @@ fn closing_and_launching_move_the_manual_out_of_view() {
     let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
     let mut app = setup(root.path());
     let manual = TexId::from_raw(9000);
-    app.set_manual_cover(Some((app.manual_cover_want().unwrap(), manual)));
+    app.set_manual_cover(Some((selected_cart(&app), manual)));
     open(&mut app);
     let parked = face(&app, manual).unwrap();
     common::through(&mut app, Btn::A);
@@ -1504,7 +1563,7 @@ fn closing_and_launching_move_the_manual_out_of_view() {
     assert!(face(&app, manual).is_none() || face(&app, manual).unwrap()[3][1] < 0.0);
 
     let mut app = setup(root.path());
-    app.set_manual_cover(Some((app.manual_cover_want().unwrap(), manual)));
+    app.set_manual_cover(Some((selected_cart(&app), manual)));
     open(&mut app);
     app.apply(Action::GbaDown(Btn::Up));
     app.update(1.0);
@@ -1520,7 +1579,7 @@ fn closing_from_selected_box_never_exposes_manual_below_box() {
     let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
     let mut app = setup(root.path());
     let manual = TexId::from_raw(9000);
-    app.set_manual_cover(Some((app.manual_cover_want().unwrap(), manual)));
+    app.set_manual_cover(Some((selected_cart(&app), manual)));
     open(&mut app);
     common::through(&mut app, Btn::Down);
     app.update(0.61);
@@ -1555,10 +1614,7 @@ fn no_manual_leaves_cartridge_as_the_top_item() {
 fn cartridge_actions_wait_when_returning_from_the_manual() {
     let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
     let mut app = setup(root.path());
-    app.set_manual_cover(Some((
-        app.manual_cover_want().unwrap(),
-        TexId::from_raw(9000),
-    )));
+    app.set_manual_cover(Some((selected_cart(&app), TexId::from_raw(9000))));
     open(&mut app);
     app.apply(Action::GbaDown(Btn::Up));
     app.update(1.0);

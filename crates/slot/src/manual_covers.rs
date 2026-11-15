@@ -365,6 +365,11 @@ mod tests {
         }
         let mut covers = ManualCovers::spawn(root.path().to_path_buf());
         let manual_tex = TexId::from_raw(2);
+        assert!(app.manual_cover_want().is_none());
+        covers.sync_with(&mut app, |_, _| panic!("cover loaded on carousel"));
+        app.apply(Action::GbaDown(Btn::A));
+        app.apply(Action::GbaUp(Btn::A));
+        assert!(app.manual_cover_want().is_some());
         let until = Instant::now() + Duration::from_secs(5);
         let mut uploaded = false;
         while !uploaded && Instant::now() < until {
@@ -376,8 +381,6 @@ mod tests {
             thread::sleep(Duration::from_millis(5));
         }
         assert!(uploaded, "cover worker did not load the PNG");
-        app.apply(Action::GbaDown(Btn::A));
-        app.apply(Action::GbaUp(Btn::A));
         app.update(1.78);
         app.apply(Action::GbaDown(Btn::Up));
         app.update(1.0);
@@ -418,6 +421,10 @@ mod tests {
         app.update(1.93);
         app.apply(Action::ShelfRight);
         assert_eq!(app.selected_stem(), Some("Other"));
+        assert!(app.manual_cover_want().is_none());
+        covers.sync_with(&mut app, |_, _| panic!("cover loaded on carousel"));
+        app.apply(Action::GbaDown(Btn::A));
+        app.apply(Action::GbaUp(Btn::A));
         let until = Instant::now() + Duration::from_secs(5);
         let mut updated = false;
         while !updated && Instant::now() < until {

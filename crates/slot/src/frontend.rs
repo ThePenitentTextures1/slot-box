@@ -51,7 +51,7 @@ pub struct Frontend {
     cart_faces: CartFaces,
     box_faces: crate::box_faces::BoxFaces,
     manual_covers: crate::manual_covers::ManualCovers,
-    _manual_resize: crate::manual_resize::Worker,
+    manual_resize: Option<(slot_store::Cart, crate::manual_resize::Worker)>,
     rebuild: Option<Rebuild>,
     stale_check: Option<std::sync::mpsc::Receiver<Vec<slot_store::Cart>>>,
     ui_faces: Option<std::sync::mpsc::Receiver<UiFaces>>,
@@ -601,10 +601,6 @@ impl Frontend {
         crate::boot_time::mark("session");
         let stale_check =
             Self::check_labels(platform.root(), session.app().carts().cloned().collect());
-        let manual_resize = crate::manual_resize::Worker::start(
-            platform.root().to_path_buf(),
-            session.app().carts().cloned().collect(),
-        );
         session
             .app_mut()
             .set_power(Power::new(platform, DOZE_TIMEOUT));
@@ -621,7 +617,7 @@ impl Frontend {
             cart_faces,
             box_faces,
             manual_covers,
-            _manual_resize: manual_resize,
+            manual_resize: None,
             rebuild: None,
             stale_check,
             ui_faces: None,
@@ -689,8 +685,8 @@ impl Frontend {
         Self::upload_paper(compositor);
         crate::boot_time::mark("paper");
         if self.rebuild.is_none() {
-            self.cart_faces.sync(self.session.app_mut(), compositor);
             self.box_faces.sync(self.session.app_mut(), compositor);
+            self.cart_faces.sync(self.session.app_mut(), compositor);
             self.manual_covers.sync(self.session.app_mut(), compositor);
         }
         crate::boot_time::mark("cart faces");
@@ -1252,8 +1248,18 @@ impl Frontend {
             compositor.upload_game(&frame);
             crate::latency::taken();
         }
-        self.cart_faces.sync(self.session.app_mut(), compositor);
         self.box_faces.sync(self.session.app_mut(), compositor);
+        self.cart_faces.sync(self.session.app_mut(), compositor);
+        if let Some(cart) = self.session.app().manual_cover_want() {
+            if self.manual_resize.as_ref().map(|(old, _)| old) != Some(&cart) {
+                if let Some(root) = self.session.app().root() {
+                    self.manual_resize = Some((
+                        cart.clone(),
+                        crate::manual_resize::Worker::start(root.to_path_buf(), vec![cart]),
+                    ));
+                }
+            }
+        }
         self.manual_covers.sync(self.session.app_mut(), compositor);
         sync_clock(self.session.app_mut(), compositor, &mut self.clocks);
         sync_box_art(self.session.app_mut(), compositor, &mut self.box_art);

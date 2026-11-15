@@ -81,7 +81,15 @@ impl App {
     }
 
     pub fn manual_cover_want(&self) -> Option<Cart> {
-        if self.carousel_view != CarouselView::Boxes {
+        if self.carousel_view != CarouselView::Boxes
+            || !matches!(
+                self.box_scene,
+                BoxScene::Opening { .. }
+                    | BoxScene::Open { .. }
+                    | BoxScene::PreparingClose { .. }
+                    | BoxScene::Closing { .. }
+            )
+        {
             return None;
         }
         self.selected_box().map(|(cart, _, _)| cart.clone())

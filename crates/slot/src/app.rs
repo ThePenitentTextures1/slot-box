@@ -3975,10 +3975,31 @@ impl App {
                 .filter(|i| !screen.contains(i))
                 .map(|i| (self.shelf_at, i)),
         );
-        wants.extend(self.bundle_seats());
+        let bundle = self.bundle_seats();
+        wants.extend(bundle.iter().copied());
         wants
             .into_iter()
-            .filter(|(at, i)| self.shelves[*at].1.face(*i).is_none())
+            .filter(|(at, i)| {
+                let shelf = &self.shelves[*at].1;
+                let selected = *at == self.shelf_at && *i == shelf.index;
+                shelf.face(*i).is_none()
+                    && (self.carousel_view != CarouselView::Boxes
+                        || crate::box_art_fetch::system_id(shelf.carts[*i].platform).is_none()
+                        || bundle.contains(&(*at, *i))
+                        || (selected
+                            && (matches!(
+                                self.box_scene,
+                                BoxScene::Opening { .. }
+                                    | BoxScene::Open { .. }
+                                    | BoxScene::PreparingClose { .. }
+                                    | BoxScene::Closing { .. }
+                                    | BoxScene::QuickOpening { .. }
+                                    | BoxScene::QuickLaunched
+                                    | BoxScene::QuickClosing { .. }
+                            ) || self.kid_locked()
+                                || !self.on_shelf()))
+                        || (shelf.box_checked(*i) && shelf.box_faces(*i).is_none()))
+            })
             .map(|(shelf, index)| FaceWant {
                 shelf,
                 index,
