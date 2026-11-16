@@ -166,6 +166,14 @@ impl BoxFaces {
     }
 
     pub fn sync(&mut self, app: &mut App, compositor: &mut Compositor) {
+        self.sync_inner(app, compositor, true);
+    }
+
+    pub fn sync_startup(&mut self, app: &mut App, compositor: &mut Compositor) {
+        self.sync_inner(app, compositor, false);
+    }
+
+    fn sync_inner(&mut self, app: &mut App, compositor: &mut Compositor, resize: bool) {
         for tex in app.shed_box_faces() {
             compositor.update_texture(tex, 1, 1, &[0; 4]);
             self.free.push(tex);
@@ -195,7 +203,58 @@ impl BoxFaces {
         }
         self.primed = true;
         self.sync_details(app, compositor);
-        self.sync_resize(app);
+        if resize {
+            self.sync_resize(app);
+        }
+    }
+
+    pub fn wait_selected_face(&mut self, app: &mut App, compositor: &mut Compositor) {
+        while app.box_face_wants().iter().any(|want| {
+            want.shelf == app.selected_box_seat().0 && want.index == app.selected_box_seat().1
+        }) {
+            let Ok((key, art)) = self.built.recv() else {
+                eprintln!("slot: box faces: workers stopped while loading selected box");
+                break;
+            };
+            self.place(app, compositor, key, art);
+            self.sync_startup(app, compositor);
+        }
+    }
+
+    pub fn wait_selected_details(&mut self, app: &mut App, compositor: &mut Compositor) {
+        self.wait_selected_details_with(app, |texture, art| match texture {
+            Some(tex) => {
+                compositor.update_texture(tex, art.w, art.h, &art.rgba);
+                tex
+            }
+            None => compositor.create_texture(art.w, art.h, &art.rgba),
+        });
+    }
+
+    fn wait_selected_details_with(
+        &mut self,
+        app: &mut App,
+        mut upload: impl FnMut(Option<TexId>, CartFace) -> TexId,
+    ) {
+        let Some(key) = app.selected_box_key() else {
+            return;
+        };
+        while self.detail_pending.is_some() {
+            let Some(cart) = app.face_cart(key.0, key.1) else {
+                break;
+            };
+            let Some(faces) = app.box_faces_at(key.0, key.1) else {
+                break;
+            };
+            let needs_back = faces.back == faces.front
+                && faces.back_size != (0, 1)
+                && self.failed_back.get(&key) != Some(cart);
+            let needs_flap = faces.flap.is_none() && self.failed_flap.get(&key) != Some(cart);
+            if !needs_back && !needs_flap {
+                break;
+            }
+            self.sync_details_with(app, &mut upload, true);
+        }
     }
 
     fn sync_resize(&mut self, app: &App) {
@@ -248,22 +307,36 @@ impl BoxFaces {
     }
 
     fn sync_details(&mut self, app: &mut App, compositor: &mut Compositor) {
-        self.sync_details_with(app, |texture, art| match texture {
-            Some(tex) => {
-                compositor.update_texture(tex, art.w, art.h, &art.rgba);
-                tex
-            }
-            None => compositor.create_texture(art.w, art.h, &art.rgba),
-        });
+        self.sync_details_with(
+            app,
+            |texture, art| match texture {
+                Some(tex) => {
+                    compositor.update_texture(tex, art.w, art.h, &art.rgba);
+                    tex
+                }
+                None => compositor.create_texture(art.w, art.h, &art.rgba),
+            },
+            false,
+        );
     }
 
     fn sync_details_with(
         &mut self,
         app: &mut App,
         mut upload: impl FnMut(Option<TexId>, CartFace) -> TexId,
+        wait: bool,
     ) {
+        let mut wait = wait;
         loop {
-            let (job, back_art, flap_art) = match self.detailed.try_recv() {
+            let result = if wait {
+                wait = false;
+                self.detailed
+                    .recv()
+                    .map_err(|_| mpsc::TryRecvError::Disconnected)
+            } else {
+                self.detailed.try_recv()
+            };
+            let (job, back_art, flap_art) = match result {
                 Ok(result) => result,
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -875,6 +948,88 @@ mod flap_tests {
     }
 
     #[test]
+    fn startup_waits_for_selected_details_but_not_its_neighbor() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::root::ensure(dir.path());
+        std::fs::create_dir_all(dir.path().join("Games/GBA")).unwrap();
+        for i in 0..2 {
+            std::fs::write(
+                dir.path().join(format!("Games/GBA/Game{i}.gba")),
+                vec![0; 256],
+            )
+            .unwrap();
+        }
+        slot_store::write_carousel_view(dir.path(), slot_store::CarouselView::Boxes).unwrap();
+        slot_store::write_slot_state(
+            dir.path(),
+            &slot_store::SlotState {
+                clock_set: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut app = App::boot(dir.path());
+        let mut worker = BoxFaces::spawn(dir.path().to_path_buf());
+        for want in app.box_face_wants() {
+            let cart = app.face_cart(want.shelf, want.index).unwrap();
+            worker.sources.insert(cart.rom.clone(), false);
+            let front = TexId::from_raw(want.index + 1);
+            app.set_box_faces(
+                want.shelf,
+                want.index,
+                Some(BoxFaceTextures {
+                    front,
+                    side: front,
+                    back: front,
+                    flap: None,
+                    front_size: (100, 100),
+                    side_size: (20, 100),
+                    back_size: (0, 0),
+                    japanese: false,
+                    pivot: [120.0, 50.0],
+                    front_center: [170.0, 50.0],
+                }),
+            );
+        }
+        let (send_jobs, jobs) = mpsc::channel();
+        let (results, received) = mpsc::channel();
+        worker.details = send_jobs;
+        worker.detailed = received;
+        let mut next = 100;
+        let mut upload = |old: Option<TexId>, _: CartFace| {
+            old.unwrap_or_else(|| {
+                next += 1;
+                TexId::from_raw(next)
+            })
+        };
+        worker.sync_details_with(&mut app, &mut upload, false);
+        let selected = jobs.try_recv().unwrap();
+        assert_eq!(selected.1.stem, "Game0");
+        let art = || CartFace {
+            rgba: vec![255; 4],
+            w: 1,
+            h: 1,
+        };
+        results.send((selected, Some(art()), Some(art()))).unwrap();
+        worker.wait_selected_details_with(&mut app, &mut upload);
+        let key = app.selected_box_key().unwrap();
+        let faces = app.box_faces_at(key.0, key.1).unwrap();
+        assert_ne!(faces.back, faces.front);
+        assert!(faces.flap.is_some());
+        assert_eq!(jobs.try_recv().unwrap().1.stem, "Game1");
+        app.set_box_faces(key.0, key.1, None);
+        worker.wait_selected_details_with(&mut app, &mut upload);
+        let mut faces = faces;
+        faces.back = faces.front;
+        faces.back_size = (0, 0);
+        faces.flap = None;
+        app.set_box_faces(key.0, key.1, Some(faces));
+        drop(results);
+        worker.wait_selected_details_with(&mut app, &mut upload);
+        assert!(worker.detail_dead);
+    }
+
+    #[test]
     fn pending_details_do_not_block_and_lru_reprioritizes_new_selection() {
         let dir = tempfile::tempdir().unwrap();
         crate::root::ensure(dir.path());
@@ -929,10 +1084,10 @@ mod flap_tests {
                 TexId::from_raw(next)
             })
         };
-        worker.sync_details_with(&mut app, &mut upload);
+        worker.sync_details_with(&mut app, &mut upload, false);
         let first = jobs.try_recv().unwrap();
         assert_eq!(first.1.stem, "Game0");
-        worker.sync_details_with(&mut app, &mut upload);
+        worker.sync_details_with(&mut app, &mut upload, false);
         assert!(
             jobs.try_recv().is_err(),
             "pending work must not be duplicated"
@@ -944,14 +1099,14 @@ mod flap_tests {
             h: 1,
         };
         results.send((first, Some(face()), Some(face()))).unwrap();
-        worker.sync_details_with(&mut app, &mut upload);
+        worker.sync_details_with(&mut app, &mut upload, false);
         let mut job = jobs.try_recv().unwrap();
         assert_eq!(job.1.stem, "Game1", "selection must outrank old neighbors");
         for expected in 1..7 {
             assert_eq!(job.1.stem, format!("Game{expected}"));
             app.apply(Action::ShelfRight);
             results.send((job, Some(face()), Some(face()))).unwrap();
-            worker.sync_details_with(&mut app, &mut upload);
+            worker.sync_details_with(&mut app, &mut upload, false);
             assert!(worker.detail_lru.len() <= DETAIL_CACHE_SIZE);
             job = jobs.try_recv().unwrap();
         }

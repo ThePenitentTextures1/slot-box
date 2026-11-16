@@ -138,7 +138,6 @@ const BOX_CLOSE_MS: Millis = 1800;
 const BOX_FOCUS_SPEED: f32 = 1.0 / 0.6;
 const BOX_FOCUS_CART_DOWN: f32 = 150.0 / 600.0;
 const BOX_FOCUS_BOX_MOVE: f32 = 320.0 / 600.0;
-const BACK_ZOOM_MAX: f32 = 4.0;
 const LINK_TEXT_Y: f32 = 44.0;
 const EDIT_DIM: [f32; 4] = [0.043, 0.043, 0.059, 0.38];
 const PART_PUSH: f32 = 300.0;
@@ -661,12 +660,14 @@ pub struct App {
     carousel: CarouselKeys,
     carousel_view: CarouselView,
     box_scene: BoxScene,
+    box_inspection_from_open: bool,
     box_detail_loading: bool,
     box_cart_loading: bool,
     box_open_from: boxview::BoxPose,
     manual_cover: Option<(Cart, TexId)>,
     manual_page_count: usize,
     manual_page_textures: Vec<(usize, TexId)>,
+    manual_page_sizes: Vec<(usize, u32, u32)>,
     manual_reader: Option<boxview::ManualReader>,
     box_focus: f32,
     box_zoom: f32,
@@ -1177,6 +1178,7 @@ impl App {
             carousel: CarouselKeys::default(),
             carousel_view: CarouselView::default(),
             box_scene: BoxScene::Carousel,
+            box_inspection_from_open: false,
             box_detail_loading: false,
             box_cart_loading: false,
             box_open_from: boxview::BoxPose {
@@ -1187,6 +1189,7 @@ impl App {
             manual_cover: None,
             manual_page_count: 0,
             manual_page_textures: Vec::new(),
+            manual_page_sizes: Vec::new(),
             manual_reader: None,
             box_focus: 0.0,
             box_zoom: 1.0,
@@ -5219,7 +5222,12 @@ impl App {
                     && self.selected_box().is_some()
                     && match action {
                         Action::SelectTap => {
-                            matches!(self.box_scene, BoxScene::Carousel | BoxScene::Back { .. })
+                            matches!(
+                                self.box_scene,
+                                BoxScene::Carousel
+                                    | BoxScene::Back { .. }
+                                    | BoxScene::Open { item: BoxItem::Box }
+                            )
                         }
                         Action::GbaDown(Btn::B | Btn::L1 | Btn::R1)
                         | Action::GbaUp(Btn::B | Btn::L1 | Btn::R1) => {
@@ -7806,13 +7814,13 @@ impl App {
                                     out,
                                 ),
                                 BoxScene::Open { item: BoxItem::Box } => {
-                                    let left = if self.box_zoom > 1.001 {
-                                        legends[4]
+                                    let action = if legends.len() >= 10 {
+                                        legends[9]
                                     } else {
-                                        legends[1]
+                                        legends[3]
                                     };
                                     self.draw_spread_legends(
-                                        &[left, legends[3]],
+                                        &[legends[1], action],
                                         self.canvas().h - MOUTH_H,
                                         bar_alpha,
                                         out,
@@ -7871,10 +7879,9 @@ impl App {
                                         out,
                                     );
                                 }
-                                BoxScene::Back { zoom, .. } => {
-                                    let back = if zoom > 1.001 { legends[4] } else { legends[0] };
+                                BoxScene::Back { .. } => {
                                     self.draw_spread_legends(
-                                        &[back, legends[3]],
+                                        &[legends[0], legends[3]],
                                         self.canvas().h - MOUTH_H,
                                         bar_alpha,
                                         out,

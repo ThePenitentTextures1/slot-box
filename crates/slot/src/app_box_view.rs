@@ -82,13 +82,19 @@ impl App {
 
     pub fn manual_cover_want(&self) -> Option<Cart> {
         if self.carousel_view != CarouselView::Boxes
-            || !matches!(
+            || !(matches!(
                 self.box_scene,
                 BoxScene::Opening { .. }
                     | BoxScene::Open { .. }
                     | BoxScene::PreparingClose { .. }
                     | BoxScene::Closing { .. }
-            )
+            ) || self.box_inspection_from_open
+                && matches!(
+                    self.box_scene,
+                    BoxScene::FlippingBack { .. }
+                        | BoxScene::Back { .. }
+                        | BoxScene::FlippingFront { .. }
+                ))
         {
             return None;
         }
@@ -105,6 +111,60 @@ impl App {
 
     pub fn set_manual_page_textures(&mut self, textures: Vec<(usize, TexId)>) {
         self.manual_page_textures = textures;
+    }
+
+    pub fn set_manual_page_sizes(&mut self, sizes: Vec<(usize, u32, u32)>) {
+        self.manual_page_sizes = sizes;
+    }
+
+    fn inspection_scale(&self) -> f32 {
+        let (_, _, (_, height, _)) = self.selected_box().expect("selected box");
+        let panel_height = if self.panel.1 == 0 {
+            self.canvas().h
+        } else {
+            self.panel.1 as f32
+        };
+        (420.0 * self.canvas().h / panel_height)
+            .min(self.canvas().h - MOUTH_H)
+            .min(self.canvas().w)
+            / height
+    }
+
+    fn inspection_center(&self) -> [f32; 2] {
+        [self.canvas().w / 2.0, (self.canvas().h - MOUTH_H) / 2.0]
+    }
+
+    fn start_box_inspection(&mut self, from_open: bool) {
+        let (center, scale, angle) = if from_open {
+            let (_, _, (_, height, _)) = self.selected_box().expect("selected box");
+            let canvas = self.canvas();
+            let box_height = height * slot_ui::BOX_VIEW_SCALE;
+            let parked = canvas.h + box_height * 0.15;
+            let t = ((self.box_focus - BOX_FOCUS_BOX_MOVE) / (1.0 - BOX_FOCUS_BOX_MOVE))
+                .clamp(0.0, 1.0);
+            let eased = t * t * (3.0 - 2.0 * t);
+            let y = parked + (canvas.h / 2.0 - parked) * eased;
+            self.box_focus = 1.0;
+            ([canvas.w / 2.0, y], slot_ui::BOX_VIEW_SCALE, 0.0)
+        } else {
+            self.shelf().selected_box_pose(self.canvas())
+        };
+        self.box_inspection_from_open = from_open;
+        self.box_back = false;
+        self.box_turn = 0.0;
+        self.box_buttons = [false; 6];
+        self.box_resetting = false;
+        self.play_held = None;
+        self.held_dir = None;
+        self.shelf_mut().release_hold();
+        self.box_scene = BoxScene::FlippingBack {
+            started: self.now(),
+            from: boxview::BoxPose {
+                center,
+                scale,
+                angle,
+            },
+        };
     }
 
     pub fn manual_page_wants(&self) -> Vec<usize> {
@@ -173,8 +233,8 @@ impl App {
             BoxScene::FlippingBack { started, .. }
                 if now.saturating_sub(started) >= BOX_FLIP_MS =>
             {
-                self.box_turn = std::f32::consts::PI;
-                self.box_back = true;
+                self.box_turn = 0.0;
+                self.box_back = false;
                 self.box_buttons = [false; 6];
                 self.box_resetting = false;
                 self.box_pending = None;
@@ -186,7 +246,13 @@ impl App {
             BoxScene::FlippingFront { started, .. }
                 if now.saturating_sub(started) >= BOX_FLIP_MS =>
             {
-                BoxScene::Carousel
+                self.box_back = false;
+                self.box_turn = 0.0;
+                if self.box_inspection_from_open {
+                    BoxScene::Open { item: BoxItem::Box }
+                } else {
+                    BoxScene::Carousel
+                }
             }
             BoxScene::Opening { started, .. }
                 if now.saturating_sub(started) >= BOX_BAR_FADE_MS + BOX_OPEN_MS =>
@@ -282,6 +348,37 @@ impl App {
         if (self.box_turn - target_turn).abs() < 0.001 {
             self.box_turn = target_turn;
         }
+        let manual_zoom_max = self
+            .manual_reader
+            .as_ref()
+            .map(|reader| {
+                let (width, height) = manual_page_size(canvas);
+                let width = width
+                    * if self.panel.0 == 0 {
+                        1.0
+                    } else {
+                        self.panel.0 as f32 / canvas.w
+                    };
+                let height = height
+                    * if self.panel.1 == 0 {
+                        1.0
+                    } else {
+                        self.panel.1 as f32 / canvas.h
+                    };
+                reader
+                    .spread(reader.page)
+                    .into_iter()
+                    .flatten()
+                    .map(|index| {
+                        self.manual_page_sizes
+                            .iter()
+                            .find(|(i, _, _)| *i == index)
+                            .map_or(1.0, |(_, w, h)| (*h as f32 / height).min(*w as f32 / width))
+                    })
+                    .fold(2.0_f32, f32::min)
+                    .clamp(1.0, 2.0)
+            })
+            .unwrap_or(1.0);
         if let Some(reader) = &mut self.manual_reader {
             if self.box_focus <= -0.999 {
                 let delta = dt.max(0.0) / boxview::MANUAL_PICKUP_SECONDS;
@@ -318,7 +415,7 @@ impl App {
             } else if reader.pickup >= 1.0 && !reader.closing && reader.turn.is_none() {
                 let delta = reader.buttons[0] as i32 - reader.buttons[1] as i32;
                 reader.zoom = (reader.zoom * (delta as f32 * dt.max(0.0) * 1.4).exp())
-                    .clamp(1.0, BACK_ZOOM_MAX);
+                    .clamp(1.0, manual_zoom_max);
                 reader.pan[0] += (reader.buttons[2] as i32 - reader.buttons[3] as i32) as f32
                     * dt.max(0.0)
                     * 360.0;
@@ -357,18 +454,29 @@ impl App {
             }
         }
         let delta = self.box_buttons[0] as i32 - self.box_buttons[1] as i32;
-        zoom = (zoom * (delta as f32 * dt * 1.4).exp()).clamp(1.0, BACK_ZOOM_MAX);
+        let scale = if inspecting {
+            self.inspection_scale()
+        } else {
+            slot_ui::BOX_VIEW_SCALE
+        };
+        let max_zoom = self
+            .selected_box()
+            .map_or(1.0, |(_, _, (w, _, _))| (canvas.w / (w * scale)).max(1.0));
+        if self.box_back && inspecting {
+            zoom = (zoom * (delta as f32 * dt * 1.4).exp()).clamp(1.0, max_zoom);
+        } else if inspecting {
+            zoom = 1.0;
+            pan = [0.0; 2];
+        }
         let dx = self.box_buttons[2] as i32 - self.box_buttons[3] as i32;
         let dy = self.box_buttons[4] as i32 - self.box_buttons[5] as i32;
         pan[0] += dx as f32 * dt * 240.0;
         pan[1] += dy as f32 * dt * 240.0;
         let canvas = self.canvas();
         if let Some((_, _, (w, h, _))) = self.selected_box() {
-            let max_x = ((w * slot_ui::BOX_VIEW_SCALE * zoom - canvas.w) / 2.0).max(0.0);
-            let max_y = ((h * slot_ui::BOX_VIEW_SCALE * zoom - canvas.h) / 2.0).max(0.0);
-            let min_y =
-                (canvas.h - MOUTH_H - 4.0 - (canvas.h + h * slot_ui::BOX_VIEW_SCALE * zoom) / 2.0)
-                    .min(0.0);
+            let max_x = ((w * scale * zoom - canvas.w) / 2.0).max(0.0);
+            let max_y = ((h * scale * zoom - (canvas.h - MOUTH_H)) / 2.0).max(0.0);
+            let min_y = -max_y;
             pan[0] = pan[0].clamp(-max_x, max_x);
             pan[1] = pan[1].clamp(min_y, max_y);
         }
@@ -382,12 +490,14 @@ impl App {
 
     pub(super) fn return_from_box_inspection(&mut self, zoom: f32, pan: [f32; 2]) {
         self.box_buttons = [false; 6];
-        let canvas = self.canvas();
         self.box_scene = BoxScene::FlippingFront {
             started: self.now(),
             from: boxview::BoxPose {
-                center: [canvas.w / 2.0 + pan[0], canvas.h / 2.0 + pan[1]],
-                scale: slot_ui::BOX_VIEW_SCALE * zoom,
+                center: [
+                    self.inspection_center()[0] + pan[0],
+                    self.inspection_center()[1] + pan[1],
+                ],
+                scale: self.inspection_scale() * zoom,
                 angle: self.box_turn,
             },
         };
@@ -435,7 +545,13 @@ impl App {
                     | BoxScene::QuickOpening { .. }
             )
         {
-            self.box_scene = BoxScene::Carousel;
+            self.box_scene = if self.box_inspection_from_open
+                && matches!(self.box_scene, BoxScene::FlippingBack { .. })
+            {
+                BoxScene::Open { item: BoxItem::Box }
+            } else {
+                BoxScene::Carousel
+            };
             self.box_detail_loading = false;
             self.box_cart_loading = false;
             return true;
@@ -479,24 +595,7 @@ impl App {
                 }
                 match action {
                     Action::SelectTap => {
-                        if self
-                            .selected_box()
-                            .is_some_and(|(_, f, _)| f.back_size == (0, 1))
-                        {
-                            return true;
-                        }
-                        let (center, scale, angle) = self.shelf().selected_box_pose(self.canvas());
-                        self.play_held = None;
-                        self.held_dir = None;
-                        self.shelf_mut().release_hold();
-                        self.box_scene = BoxScene::FlippingBack {
-                            started: self.now(),
-                            from: boxview::BoxPose {
-                                center,
-                                scale,
-                                angle,
-                            },
-                        };
+                        self.start_box_inspection(false);
                         true
                     }
                     Action::GbaDown(Btn::Select) | Action::GbaUp(Btn::Select) => true,
@@ -580,12 +679,15 @@ impl App {
                             .is_some_and(|(_, f, _)| f.back_size != (0, 1))
                     {
                         self.box_back = !self.box_back;
+                        if !self.box_back {
+                            self.box_scene = BoxScene::Back {
+                                zoom: 1.0,
+                                pan: [0.0; 2],
+                            };
+                            self.box_buttons = [false; 6];
+                            self.box_resetting = false;
+                        }
                     }
-                    true
-                }
-                Action::GbaDown(Btn::B) if zoom > 1.001 => {
-                    self.box_resetting = true;
-                    self.box_buttons = [false; 6];
                     true
                 }
                 Action::GbaDown(Btn::B) => {
@@ -719,17 +821,13 @@ impl App {
                     self.box_pending = Some(BoxCartAction::Studio);
                     true
                 }
-                Action::GbaDown(Btn::A) | Action::Insert if item == BoxItem::Box => {
-                    if self.box_back
-                        || self
-                            .selected_box()
-                            .is_some_and(|(_, f, _)| f.back_size != (0, 1))
-                    {
-                        self.box_back = !self.box_back;
-                    }
+                Action::GbaDown(Btn::A) | Action::Insert | Action::SelectTap
+                    if item == BoxItem::Box =>
+                {
+                    self.start_box_inspection(true);
                     true
                 }
-                Action::GbaDown(Btn::Start) | Action::SelectTap if item == BoxItem::Box => true,
+                Action::GbaDown(Btn::Start) if item == BoxItem::Box => true,
                 Action::GbaDown(Btn::A) | Action::Insert if item == BoxItem::Manual => {
                     if self.manual_page_count > 0 {
                         self.manual_reader =
@@ -907,6 +1005,19 @@ impl App {
         self.on_shelf() && self.carousel_view == CarouselView::Boxes
     }
 
+    pub fn box_view_enabled(&self) -> bool {
+        self.carousel_view == CarouselView::Boxes
+    }
+
+    pub fn selected_box_key(&self) -> Option<(usize, usize)> {
+        self.selected_box()
+            .map(|_| (self.shelf_at, self.shelf().index))
+    }
+
+    pub fn selected_box_seat(&self) -> (usize, usize) {
+        (self.shelf_at, self.shelf().index)
+    }
+
     pub fn box_resize_carts(&self) -> Vec<Cart> {
         let mut seen = std::collections::HashSet::new();
         self.shelves
@@ -955,12 +1066,6 @@ impl App {
     pub fn box_back_unavailable(&mut self, shelf: usize, index: usize) {
         if shelf == self.shelf_at && index == self.shelf().index {
             self.box_back = false;
-            if matches!(
-                self.box_scene,
-                BoxScene::FlippingBack { .. } | BoxScene::Back { .. }
-            ) {
-                self.box_scene = BoxScene::Carousel;
-            }
         }
     }
 
@@ -1009,10 +1114,12 @@ impl App {
                 let t = (now.saturating_sub(started) as f32 / BOX_FLIP_MS as f32).clamp(0.0, 1.0);
                 let eased = t * t * (3.0 - 2.0 * t);
                 let (center, scale, angle) = if to_back {
+                    (self.inspection_center(), self.inspection_scale(), 0.0)
+                } else if self.box_inspection_from_open {
                     (
                         [canvas.w / 2.0, canvas.h / 2.0],
                         slot_ui::BOX_VIEW_SCALE,
-                        std::f32::consts::PI,
+                        0.0,
                     )
                 } else {
                     self.shelf().selected_box_pose(canvas)
@@ -1033,12 +1140,13 @@ impl App {
                 );
             }
             BoxScene::Back { zoom, pan } => {
-                let scale = slot_ui::BOX_VIEW_SCALE * zoom;
+                let scale = self.inspection_scale() * zoom;
+                let center = self.inspection_center();
                 slot_ui::draw_rotated_box(
                     faces,
                     (front_w * scale, front_h * scale, depth * scale),
                     self.box_turn,
-                    [canvas.w / 2.0 + pan[0], canvas.h / 2.0 + pan[1]],
+                    [center[0] + pan[0], center[1] + pan[1]],
                     1.0,
                     out,
                 );

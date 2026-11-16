@@ -158,7 +158,12 @@ fn an_unavailable_back_cannot_be_inspected_or_flipped() {
     app.set_box_faces(want.shelf, want.index, Some(faces));
     app.apply(Action::SelectTap);
     app.update(0.5);
-    assert!(face(&app, faces.front).is_some());
+    let front = face(&app, faces.front).unwrap();
+    app.apply(Action::GbaDown(Btn::A));
+    app.update(1.0);
+    equal_pose(front, face(&app, faces.front).unwrap());
+    app.apply(Action::GbaDown(Btn::B));
+    app.update(0.5);
     app.apply(Action::GbaDown(Btn::A));
     app.apply(Action::GbaUp(Btn::A));
     app.update(1.8);
@@ -229,6 +234,86 @@ fn opening_waits_for_art_without_freezing_and_can_be_cancelled() {
     app.apply(Action::GbaDown(Btn::B));
     app.update(2.0);
     assert!(app.manual_cover_want().is_none());
+}
+
+#[test]
+fn inspection_zoom_fills_each_screen_width_even_with_a_small_back() {
+    for panel in [(720, 480), (640, 480)] {
+        for back_width in [100, 720] {
+            let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+            let mut app = setup(root.path());
+            app.set_panel(panel);
+            let want = app.box_prefetch_wants()[0];
+            let mut art = textures(1000);
+            art.back_size = (back_width, 100);
+            app.set_box_faces(want.0, want.1, Some(art));
+            let carousel = face(&app, art.front).unwrap();
+            app.apply(Action::SelectTap);
+            app.update(0.33);
+            let front = face(&app, art.front).unwrap();
+            assert!((front[3][1] - front[0][1] - 420.0).abs() < 0.1);
+            app.apply(Action::GbaDown(Btn::R1));
+            app.update(3.0);
+            app.apply(Action::GbaUp(Btn::R1));
+            equal_pose(front, face(&app, art.front).unwrap());
+            app.apply(Action::GbaDown(Btn::A));
+            app.update(1.0);
+            app.apply(Action::GbaDown(Btn::R1));
+            app.update(4.0);
+            app.apply(Action::GbaUp(Btn::R1));
+            let back = face(&app, art.back).unwrap();
+            assert!(((back[1][0] - back[0][0]).abs() - panel.0 as f32).abs() < 0.1);
+            app.apply(Action::GbaDown(Btn::B));
+            app.update(0.33);
+            equal_pose(carousel, face(&app, art.front).unwrap());
+        }
+    }
+}
+
+#[test]
+fn manual_zoom_respects_native_resolution_and_two_times_limit() {
+    for (width, height, expected) in [(1600, 844, 2.0), (1600, 633, 1.5), (1600, 300, 1.0)] {
+        let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+        let mut app = setup(root.path());
+        app.set_panel((720, 480));
+        let cover = TexId::from_raw(9000);
+        app.set_manual_cover(Some((selected_cart(&app), cover)));
+        app.set_manual_page_count(1);
+        app.set_manual_page_sizes(vec![(0, width, height)]);
+        open(&mut app);
+        app.apply(Action::GbaDown(Btn::Up));
+        app.update(1.0);
+        app.apply(Action::GbaDown(Btn::A));
+        app.update(0.31);
+        let before = face(&app, cover).unwrap();
+        app.apply(Action::GbaDown(Btn::R1));
+        app.update(4.0);
+        app.apply(Action::GbaUp(Btn::R1));
+        let after = face(&app, cover).unwrap();
+        let scale = (after[3][1] - after[0][1]) / (before[3][1] - before[0][1]);
+        assert!(
+            (scale - expected).abs() < 0.01,
+            "expected {expected}, got {scale}"
+        );
+    }
+}
+
+#[test]
+fn open_box_select_enters_inspection_and_b_returns_to_box() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    let mut app = setup(root.path());
+    open(&mut app);
+    app.apply(Action::GbaDown(Btn::Down));
+    app.update(1.0);
+    let before = face(&app, textures(1000).front).unwrap();
+    app.apply(Action::SelectTap);
+    app.update(0.33);
+    let inspected = face(&app, textures(1000).front).unwrap();
+    assert!((inspected[3][1] - inspected[0][1] - 420.0).abs() < 0.1);
+    app.apply(Action::GbaDown(Btn::B));
+    app.update(0.33);
+    equal_pose(before, face(&app, textures(1000).front).unwrap());
+    assert!(app.manual_cover_want().is_some());
 }
 
 fn equal_pose(a: [[f32; 2]; 4], b: [[f32; 2]; 4]) {
@@ -310,13 +395,12 @@ fn flipping_uses_the_spine_and_returns_to_the_carousel() {
 
     app.update(0.08);
     assert!(face(&app, tex.front).is_some());
-    assert!(face(&app, tex.side).is_some());
+    app.update(0.25);
+    assert!(face(&app, tex.front).is_some());
+    app.apply(Action::GbaDown(Btn::A));
     app.update(0.08);
     assert!(face(&app, tex.side).is_some());
-    app.update(0.08);
-    assert!(face(&app, tex.side).is_some());
-    assert!(face(&app, tex.back).is_some());
-    app.update(0.09);
+    app.update(0.92);
     let back = face(&app, tex.back).unwrap();
 
     app.apply(Action::GbaDown(Btn::B));
@@ -382,6 +466,8 @@ fn r2_does_not_leave_carousel_box_inspection() {
     let mut app = setup(root.path());
     common::through(&mut app, Btn::Select);
     app.update(0.33);
+    common::through(&mut app, Btn::A);
+    app.update(1.0);
     let back = face(&app, textures(1000).back).unwrap();
     common::through(&mut app, Btn::R2);
     app.update(0.4);
@@ -394,8 +480,6 @@ fn r2_does_not_leave_carousel_box_inspection() {
     app.update(0.4);
     equal_pose(zoomed, face(&app, textures(1000).back).unwrap());
     common::through(&mut app, Btn::B);
-    app.update(1.0);
-    common::through(&mut app, Btn::B);
     app.update(0.33);
     assert!(face(&app, textures(1000).front).is_some());
 }
@@ -406,7 +490,7 @@ fn carousel_inspection_returns_on_horizontal_navigation() {
     let mut app = setup(root.path());
     app.apply(Action::SelectTap);
     app.update(0.33);
-    assert!(face(&app, textures(1000).back).is_some());
+    assert!(face(&app, textures(1000).front).is_some());
     app.apply(Action::ShelfLeft);
     app.update(0.33);
     assert!(face(&app, textures(1000).front).is_some());
@@ -420,17 +504,20 @@ fn flipping_back_from_zoom_preserves_the_initial_pose() {
     let tex = textures(1000);
     app.apply(Action::SelectTap);
     app.update(0.33);
+    app.apply(Action::GbaDown(Btn::A));
+    app.update(1.0);
     app.apply(Action::GbaDown(Btn::R1));
     app.update(0.5);
     app.apply(Action::GbaUp(Btn::R1));
     let zoomed = face(&app, tex.back).unwrap();
-    app.apply(Action::GbaDown(Btn::B));
-    equal_pose(zoomed, face(&app, tex.back).unwrap());
+    app.apply(Action::GbaDown(Btn::A));
     app.update(1.0);
-    let reset = face(&app, tex.back).unwrap();
+    let reset = face(&app, tex.front).unwrap();
     assert!(reset[1][0] - reset[0][0] < zoomed[1][0] - zoomed[0][0]);
-    app.apply(Action::GbaDown(Btn::B));
-    equal_pose(reset, face(&app, tex.back).unwrap());
+    app.apply(Action::GbaDown(Btn::R1));
+    app.update(1.0);
+    app.apply(Action::GbaUp(Btn::R1));
+    equal_pose(reset, face(&app, tex.front).unwrap());
 }
 
 fn open(app: &mut App) {
@@ -649,14 +736,9 @@ fn actual_footer_hints_leave_the_slot_uncovered_on_supported_panels() {
                     }
                 }
             }
-            if zoom {
-                assert!(out
-                    .iter()
-                    .any(|d| matches!(d, Draw::Tex { tex, .. } if *tex == legends[4].0)));
-                assert!(!out
-                    .iter()
-                    .any(|d| matches!(d, Draw::Tex { tex, .. } if *tex == legends[1].0)));
-            }
+            assert!(out
+                .iter()
+                .any(|d| matches!(d, Draw::Tex { tex, .. } if *tex == legends[1].0)));
         }
     }
 }
@@ -761,7 +843,7 @@ fn footer_fades_in_before_the_box_moves_and_also_marks_inspection() {
             })
             .unwrap()
     };
-    assert!(index(textures(1000).back) < index(plugged));
+    assert!(index(textures(1000).front) < index(plugged));
     assert!(index(plugged) < index(legends[0].0));
     assert!(index(plugged) < index(legends[3].0));
     assert!(!out
@@ -1026,23 +1108,28 @@ fn inspecting_zoomed_box_can_pan_its_bottom_above_the_footer() {
                 open(&mut app);
                 app.apply(Action::GbaDown(Btn::Down));
                 app.update(1.0);
+                app.apply(Action::GbaDown(Btn::A));
+                app.update(0.33);
             }
+            app.apply(Action::GbaDown(Btn::A));
+            app.update(1.0);
             app.apply(Action::GbaDown(Btn::R1));
             app.update(zoom_time);
             app.apply(Action::GbaUp(Btn::R1));
             app.apply(Action::GbaDown(Btn::Down));
             app.update(5.0);
             app.apply(Action::GbaUp(Btn::Down));
-            let tex = if carousel {
-                textures(1000).back
-            } else {
-                textures(1000).front
-            };
+            let tex = textures(1000).back;
             let bottom = face(&app, tex).unwrap()[3][1];
             assert!(
                 bottom <= slot_ui::OUT_H as f32 - slot_ui::MOUTH_H + 0.01,
                 "box bottom {bottom} is covered, carousel={carousel}, zoom_time={zoom_time}"
             );
+            app.apply(Action::GbaDown(Btn::Up));
+            app.update(10.0);
+            app.apply(Action::GbaUp(Btn::Up));
+            let top = face(&app, tex).unwrap()[0][1];
+            assert!(top >= -0.01, "box top {top} is offscreen");
         }
     }
 }
@@ -1179,6 +1266,8 @@ fn closing_a_backwards_box_flips_it_before_the_flap_opens() {
         app.update(1.0);
         app.apply(Action::GbaDown(Btn::A));
         app.update(1.0);
+        app.apply(Action::GbaDown(Btn::A));
+        app.update(1.0);
         let back = face(&app, textures(1000).back).unwrap();
         app.apply(close);
         equal_pose(back, face(&app, textures(1000).back).unwrap());
@@ -1192,6 +1281,7 @@ fn closing_a_backwards_box_flips_it_before_the_flap_opens() {
             .any(|d| matches!(d, Draw::Part { tex, .. } if *tex == TexId::from_raw(4000))));
         app.update(0.17);
         assert!(face(&app, textures(1000).front).is_some());
+        app.apply(Action::GbaDown(Btn::B));
         app.update(0.4);
         assert!(frame(&app)
             .iter()
@@ -1510,6 +1600,7 @@ fn manual_reads_pages_turns_zoom_pans_and_puts_down() {
     app.set_manual_cover(Some((selected_cart(&app), cover)));
     app.set_manual_page_count(6);
     app.set_manual_page_textures(pages.clone());
+    app.set_manual_page_sizes((0..6).map(|i| (i, 1200, 844)).collect());
     app.set_left_stick(true);
     assert!(!app.left_stick_dpad());
     open(&mut app);
@@ -1753,6 +1844,8 @@ fn open_box_controls_flip_zoom_pan_and_close_without_changing_shelf() {
     app.apply(Action::GbaDown(Btn::Down));
     app.update(1.0);
     app.apply(Action::GbaDown(Btn::A));
+    app.update(0.33);
+    app.apply(Action::GbaDown(Btn::A));
     app.update(0.08);
     assert!(face(&app, textures(1000).side).is_some());
     app.update(1.0);
@@ -1767,9 +1860,9 @@ fn open_box_controls_flip_zoom_pan_and_close_without_changing_shelf() {
     app.update(0.2);
     app.apply(Action::GbaUp(Btn::Left));
     let panned = face(&app, textures(1000).back).unwrap();
-    assert!(panned[0][0] > zoomed[0][0]);
+    assert!((panned[0][0] - zoomed[0][0]).abs() < 0.1);
     app.apply(Action::GbaDown(Btn::B));
-    app.update(1.0);
+    app.update(0.33);
     assert!(matches!(app.phase(), Phase::Shelf));
     app.apply(Action::GbaDown(Btn::B));
     app.update(1.81);

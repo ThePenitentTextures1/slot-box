@@ -152,6 +152,8 @@ fn box_navigation_in_kid_mode(mode: KidMode) {
     }
     common::through(&mut a, Btn::Select);
     settle(&mut a);
+    press(&mut a, Btn::A);
+    settle(&mut a);
     let mut draws = Vec::new();
     a.draw(&mut draws);
     assert!(draws.iter().any(|d| matches!(d, slot_ui::Draw::PerspectiveQuad { tex, .. } if *tex == slot_ui::TexId::from_raw(1002))));
@@ -162,6 +164,7 @@ fn box_navigation_in_kid_mode(mode: KidMode) {
     let cart = a.manual_cover_want().expect("open box requests its manual");
     a.set_manual_cover(Some((cart, slot_ui::TexId::from_raw(3000))));
     a.set_manual_page_count(4);
+    a.set_manual_page_sizes((0..4).map(|i| (i, 1200, 844)).collect());
     a.set_manual_page_textures(vec![
         (1, slot_ui::TexId::from_raw(3001)),
         (2, slot_ui::TexId::from_raw(3002)),
@@ -173,6 +176,17 @@ fn box_navigation_in_kid_mode(mode: KidMode) {
     assert!(a.studio().is_none());
     assert!(a.core_picker().is_none());
     assert!(a.quick_menu().is_none());
+    press(&mut a, Btn::Down);
+    settle(&mut a);
+    common::through(&mut a, Btn::Select);
+    settle(&mut a);
+    let mut draws = Vec::new();
+    a.draw(&mut draws);
+    assert!(draws.iter().any(|d| matches!(d, slot_ui::Draw::PerspectiveQuad { tex, .. } if *tex == slot_ui::TexId::from_raw(1000))));
+    press(&mut a, Btn::B);
+    settle(&mut a);
+    press(&mut a, Btn::Up);
+    settle(&mut a);
     press(&mut a, Btn::Up);
     settle(&mut a);
     press(&mut a, Btn::A);

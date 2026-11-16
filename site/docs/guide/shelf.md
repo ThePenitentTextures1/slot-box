@@ -55,9 +55,10 @@ art, the carousel has these box-specific controls in addition to the collection 
 | <kbd>B</kbd> | No action on the carousel; returns to it from Open Box View |
 
 Ejecting a quick-started game puts its cartridge away and returns to the carousel.
-Artwork for the selected box and its neighbors loads in the background. If
-the selected artwork is still loading when a box is opened or inspected,
-the carousel shows a loading indicator; press <kbd>B</kbd> to cancel.
+The initially selected box's contents load before Box View becomes interactive.
+Artwork for neighboring boxes loads in the background. If artwork for a
+newly selected box is still loading when it is opened or inspected, the
+carousel shows a loading indicator; press <kbd>B</kbd> to cancel.
 
 The cartridge is selected first in Open Box View. Press <kbd>Down</kbd> to select the box and
 <kbd>Up</kbd> to return to the cartridge. When a manual is available, press
@@ -73,18 +74,18 @@ With the manual selected, press <kbd>A</kbd> to pick it up. Hold
 <kbd>Left</kbd> or <kbd>Right</kbd> to pan across a spread. Double-tap a
 direction, or tap it at the outer edge, to turn to the next or previous spread.
 Hold <kbd>R1</kbd> or <kbd>L1</kbd> to zoom; while zoomed, directions pan
-instead of turning pages, including vertically. On devices with a left stick,
+instead of turning pages, including vertically. Zoom is limited to 2× and
+the loaded pages' native resolution. On devices with a left stick,
 it can also pan while zoomed. <kbd>B</kbd> resets the zoom, or closes and
 puts down the manual at normal size. Missing manuals leave the cartridge as
 the topmost item.
 
-With the box selected, <kbd>A</kbd> flips it, <kbd>R1</kbd> zooms in, and
-<kbd>L1</kbd> zooms out. While zoomed, hold a direction to pan and press
-<kbd>B</kbd> to reset the zoom. At normal zoom, <kbd>B</kbd> or
-<kbd>Left</kbd>/<kbd>Right</kbd> closes the box. On the carousel,
-<kbd>SELECT</kbd> inspects the box; the same flip, zoom and pan controls apply,
-and <kbd>B</kbd> returns to the carousel. If the box is facing backward when
-closed, it flips to the front before the cartridge is put away.
+With the box selected, <kbd>A</kbd> or <kbd>SELECT</kbd> opens the same
+inspection view as <kbd>SELECT</kbd> on the carousel. It opens on the front;
+press <kbd>A</kbd> or <kbd>SELECT</kbd> to flip to the back, if available.
+On the back, hold <kbd>R1</kbd> or <kbd>L1</kbd> to zoom and directions to
+pan. Zoom stops when the back fills the screen width, even for smaller images.
+The front cannot be zoomed. <kbd>B</kbd> returns to the previous view.
 
 ## The shelves
 

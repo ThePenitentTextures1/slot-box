@@ -152,6 +152,28 @@ impl CartFaces {
         app.set_box_cart_loading(!self.unavailable && app.box_cart_is_loading());
     }
 
+    pub fn wait_selected(&mut self, app: &mut App, compositor: &mut Compositor) {
+        let Some(selected) = app.selected_box_key() else {
+            return;
+        };
+        while self.building.carts.contains_key(&selected) {
+            match self.built.recv() {
+                Ok((key, face, interior)) => {
+                    self.place(app, compositor, key, face, interior);
+                    self.sync(app, compositor);
+                }
+                Err(_) => {
+                    if !self.unavailable {
+                        eprintln!("slot: cart faces: workers stopped");
+                    }
+                    self.unavailable = true;
+                    break;
+                }
+            }
+        }
+        app.set_box_cart_loading(!self.unavailable && app.box_cart_is_loading());
+    }
+
     fn requeue(&mut self, app: &App, wants: &[FaceWant]) {
         let (lock, wake) = &*self.queue;
         let mut queue = lock.lock().unwrap_or_else(|e| e.into_inner());

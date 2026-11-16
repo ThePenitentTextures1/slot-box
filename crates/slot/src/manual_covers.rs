@@ -27,6 +27,7 @@ struct CachedCover {
     cart: Cart,
     pages: Vec<slot_store::ManualPage>,
     texture: Option<TexId>,
+    size: Option<(u32, u32)>,
 }
 
 pub struct ManualCovers {
@@ -41,6 +42,7 @@ pub struct ManualCovers {
     pages: Vec<slot_store::ManualPage>,
     page_worker: PageWorker,
     page_textures: Vec<(usize, TexId)>,
+    page_sizes: Vec<(usize, u32, u32)>,
     free: Vec<TexId>,
     requested: Vec<usize>,
 }
@@ -151,13 +153,28 @@ impl ManualCovers {
             pages: Vec::new(),
             page_worker: PageWorker::spawn(),
             page_textures: Vec::new(),
+            page_sizes: Vec::new(),
             free: Vec::new(),
             requested: Vec::new(),
         }
     }
 
     pub fn sync(&mut self, app: &mut App, compositor: &mut Compositor) {
-        self.sync_with(app, |texture, cover| match texture {
+        self.sync_with(
+            app,
+            |texture, cover| match texture {
+                Some(tex) => {
+                    compositor.update_texture(tex, cover.w, cover.h, &cover.rgba);
+                    tex
+                }
+                None => compositor.create_texture(cover.w, cover.h, &cover.rgba),
+            },
+            false,
+        );
+    }
+
+    pub fn wait_selected(&mut self, app: &mut App, compositor: &mut Compositor) {
+        self.wait_selected_with(app, |texture, cover| match texture {
             Some(tex) => {
                 compositor.update_texture(tex, cover.w, cover.h, &cover.rgba);
                 tex
@@ -166,10 +183,28 @@ impl ManualCovers {
         });
     }
 
+    fn wait_selected_with(
+        &mut self,
+        app: &mut App,
+        mut upload: impl FnMut(Option<TexId>, CartFace) -> TexId,
+    ) {
+        let Some(selected) = app
+            .selected_box_key()
+            .and_then(|(s, i)| app.face_cart(s, i).cloned())
+        else {
+            return;
+        };
+        while self.cover_pending.is_some() && !self.cache.iter().any(|entry| entry.cart == selected)
+        {
+            self.sync_with(app, &mut upload, true);
+        }
+    }
+
     fn sync_with(
         &mut self,
         app: &mut App,
         mut upload: impl FnMut(Option<TexId>, CartFace) -> TexId,
+        wait: bool,
     ) {
         let want = app.manual_cover_want();
         if want != self.wanted {
@@ -179,6 +214,8 @@ impl ManualCovers {
             app.set_manual_cover(None);
             app.set_manual_page_count(0);
             app.set_manual_page_textures(Vec::new());
+            app.set_manual_page_sizes(Vec::new());
+            self.page_sizes.clear();
             self.pages.clear();
             self.requested.clear();
             self.free
@@ -197,8 +234,17 @@ impl ManualCovers {
                 }
             }
         }
+        let mut wait = wait;
         loop {
-            let (_generation, cart, result) = match self.results.try_recv() {
+            let result = if wait {
+                wait = false;
+                self.results
+                    .recv()
+                    .map_err(|_| mpsc::TryRecvError::Disconnected)
+            } else {
+                self.results.try_recv()
+            };
+            let (_generation, cart, result) = match result {
                 Ok(result) => result,
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -218,12 +264,14 @@ impl ManualCovers {
                     (Vec::new(), None)
                 }
             };
+            let size = cover.as_ref().map(|cover| (cover.w, cover.h));
             let texture = cover.map(|cover| upload(self.free.pop(), cover));
             self.cache.retain(|entry| entry.cart != cart);
             self.cache.push_back(CachedCover {
                 cart,
                 pages,
                 texture,
+                size,
             });
         }
         let selected = app
@@ -256,6 +304,9 @@ impl ManualCovers {
                     self.pages = entry.pages.clone();
                     app.set_manual_page_count(self.pages.len());
                     app.set_manual_cover(entry.texture.map(|tex| (cart.clone(), tex)));
+                    if let Some((w, h)) = entry.size {
+                        self.page_sizes.push((0, w, h));
+                    }
                     self.applied = Some(cart.clone());
                 }
             }
@@ -290,6 +341,8 @@ impl ManualCovers {
                 false
             }
         });
+        self.page_sizes
+            .retain(|(index, _, _)| *index == 0 || wants.contains(index));
         self.requested.retain(|i| wants.contains(i));
         {
             let (lock, wake) = &*self.page_worker.queue;
@@ -320,6 +373,7 @@ impl ManualCovers {
             }
             match result {
                 Ok(page) => {
+                    self.page_sizes.push((index, page.w, page.h));
                     let tex = upload(self.free.pop(), page);
                     self.page_textures.push((index, tex));
                 }
@@ -330,6 +384,7 @@ impl ManualCovers {
             }
         }
         app.set_manual_page_textures(self.page_textures.clone());
+        app.set_manual_page_sizes(self.page_sizes.clone());
     }
 }
 
@@ -426,6 +481,7 @@ mod tests {
                 cart,
                 pages: Vec::new(),
                 texture: Some(tex),
+                size: Some((100, 100)),
             });
             app.set_box_faces(
                 want.shelf,
@@ -445,11 +501,15 @@ mod tests {
             );
         }
         let mut cleared = Vec::new();
-        covers.sync_with(&mut app, |texture, face| {
-            assert_eq!((face.w, face.h), (1, 1));
-            cleared.push(texture.unwrap());
-            texture.unwrap()
-        });
+        covers.sync_with(
+            &mut app,
+            |texture, face| {
+                assert_eq!((face.w, face.h), (1, 1));
+                cleared.push(texture.unwrap());
+                texture.unwrap()
+            },
+            false,
+        );
         assert_eq!(covers.cache.len(), COVER_CACHE_SIZE);
         assert_eq!(covers.cache.back().unwrap().cart.stem, "Game0");
         assert!(!covers.cache.iter().any(|entry| entry.cart.stem == "Game1"));
@@ -511,15 +571,25 @@ mod tests {
         let mut covers = ManualCovers::spawn(root.path().to_path_buf());
         let manual_tex = TexId::from_raw(2);
         assert!(app.manual_cover_want().is_none());
-        covers.sync_with(&mut app, |_, _| panic!("cover loaded on carousel"));
+        covers.sync_with(&mut app, |_, _| panic!("cover loaded on carousel"), false);
         assert_eq!(covers.cover_pending.as_ref().unwrap().stem, "Game");
+        covers.wait_selected_with(&mut app, |_, face| {
+            assert_eq!(&face.rgba[..3], &[220, 10, 30]);
+            manual_tex
+        });
+        assert_eq!(covers.cache.back().unwrap().cart.stem, "Game");
+        assert_eq!(covers.cover_pending.as_ref().unwrap().stem, "Other");
         let until = Instant::now() + Duration::from_secs(5);
         while covers.cache.len() < 2 && Instant::now() < until {
-            covers.sync_with(&mut app, |_, face| match &face.rgba[..3] {
-                [220, 10, 30] => manual_tex,
-                [10, 20, 220] => TexId::from_raw(4),
-                colour => panic!("unexpected cover {colour:?}"),
-            });
+            covers.sync_with(
+                &mut app,
+                |_, face| match &face.rgba[..3] {
+                    [220, 10, 30] => manual_tex,
+                    [10, 20, 220] => TexId::from_raw(4),
+                    colour => panic!("unexpected cover {colour:?}"),
+                },
+                false,
+            );
             thread::sleep(Duration::from_millis(5));
         }
         assert_eq!(
@@ -530,7 +600,7 @@ mod tests {
         app.apply(Action::GbaDown(Btn::A));
         app.apply(Action::GbaUp(Btn::A));
         assert!(app.manual_cover_want().is_some());
-        covers.sync_with(&mut app, |_, _| panic!("cached cover was reloaded"));
+        covers.sync_with(&mut app, |_, _| panic!("cached cover was reloaded"), false);
         app.update(1.78);
         app.apply(Action::GbaDown(Btn::Up));
         app.update(1.0);
@@ -548,11 +618,15 @@ mod tests {
         while (!page_uploaded || app.toast() != Some(slot_ui::Toast::ManualPageFailed))
             && Instant::now() < until
         {
-            covers.sync_with(&mut app, |_, face| {
-                assert_eq!(&face.rgba[..4], &[20, 200, 30, 255]);
-                page_uploaded = true;
-                page_tex
-            });
+            covers.sync_with(
+                &mut app,
+                |_, face| {
+                    assert_eq!(&face.rgba[..4], &[20, 200, 30, 255]);
+                    page_uploaded = true;
+                    page_tex
+                },
+                false,
+            );
             thread::sleep(Duration::from_millis(5));
         }
         assert!(page_uploaded, "page worker did not load the PNG");
@@ -572,10 +646,59 @@ mod tests {
         app.apply(Action::ShelfRight);
         assert_eq!(app.selected_stem(), Some("Other"));
         assert!(app.manual_cover_want().is_none());
-        covers.sync_with(&mut app, |_, _| panic!("cover loaded on carousel"));
+        covers.sync_with(&mut app, |_, _| panic!("cover loaded on carousel"), false);
         app.apply(Action::GbaDown(Btn::A));
         app.apply(Action::GbaUp(Btn::A));
-        covers.sync_with(&mut app, |_, _| panic!("neighbor cover was reloaded"));
+        covers.sync_with(
+            &mut app,
+            |_, _| panic!("neighbor cover was reloaded"),
+            false,
+        );
         assert_eq!(covers.applied.as_ref().unwrap().stem, "Other");
+    }
+
+    #[test]
+    fn startup_treats_missing_manual_as_complete() {
+        let root = tempfile::tempdir().unwrap();
+        crate::root::ensure(root.path());
+        std::fs::create_dir_all(root.path().join("Games/GBA")).unwrap();
+        std::fs::write(root.path().join("Games/GBA/Game.gba"), vec![0; 256]).unwrap();
+        std::fs::write(root.path().join("Games/GBA/Other.gba"), vec![0; 256]).unwrap();
+        write_carousel_view(root.path(), CarouselView::Boxes).unwrap();
+        slot_store::write_slot_state(
+            root.path(),
+            &slot_store::SlotState {
+                clock_set: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut app = App::boot(root.path());
+        let want = app.box_face_wants().remove(0);
+        let tex = TexId::from_raw(1);
+        app.set_box_faces(
+            want.shelf,
+            want.index,
+            Some(BoxFaceTextures {
+                front: tex,
+                side: tex,
+                back: tex,
+                flap: None,
+                front_size: (100, 100),
+                side_size: (20, 100),
+                back_size: (0, 0),
+                japanese: false,
+                pivot: [120.0, 50.0],
+                front_center: [170.0, 50.0],
+            }),
+        );
+        let mut covers = ManualCovers::spawn(root.path().to_path_buf());
+        covers.sync_with(&mut app, |_, _| panic!("no manual exists"), false);
+        covers.wait_selected_with(&mut app, |_, _| panic!("no manual exists"));
+        let entry = covers.cache.back().unwrap();
+        assert_eq!(entry.cart.stem, "Game");
+        assert!(entry.pages.is_empty());
+        assert!(entry.texture.is_none());
+        assert!(covers.cover_pending.is_none());
     }
 }
