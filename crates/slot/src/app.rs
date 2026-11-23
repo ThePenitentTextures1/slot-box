@@ -138,6 +138,7 @@ const CORE_PICKER_DIM: f32 = 0.25 / (1.0 - CORE_PICKER_RECEDE);
 const BOX_FLIP_MS: Millis = 320;
 const BOX_BAR_FADE_MS: Millis = 120;
 const BOX_OPEN_MS: Millis = 1650;
+const BOX_QUICK_MS: Millis = 220;
 const BOX_CLOSE_MS: Millis = 1800;
 const BOX_FOCUS_SPEED: f32 = 1.0 / 0.6;
 const BOX_FOCUS_CART_DOWN: f32 = 150.0 / 600.0;
@@ -7481,7 +7482,18 @@ impl App {
         }
         self.lock_kid_on_close();
         self.take_eject_write(false);
+        let quick_started = match self.box_scene {
+            BoxScene::QuickOpening { started } => Some(started),
+            _ => None,
+        };
         self.tick_box_scene();
+        let insert_dt = match (quick_started, self.box_scene) {
+            (Some(started), BoxScene::QuickLaunched) => {
+                ((self.clock - (started + BOX_QUICK_MS) as f64) / 1000.0).clamp(0.0, dt as f64)
+                    as f32
+            }
+            _ => dt,
+        };
         self.tick_open_box(dt);
         if self.name_pending && self.shelf_platform.face.is_some() {
             self.name_pending = false;
@@ -7552,8 +7564,8 @@ impl App {
             } => {
                 let was = *t;
                 *t += match *t < SEATED_AT {
-                    true => dt * fly.0,
-                    false => dt,
+                    true => insert_dt * fly.0,
+                    false => insert_dt,
                 };
                 let at = SEATED_AT - clicks.0.lead() * fly.0;
                 touched = !*resumed && was < at && *t >= at;
@@ -7587,7 +7599,7 @@ impl App {
             }
             if matches!(phase, Phase::Shelf) && matches!(self.box_scene, BoxScene::QuickLaunched) {
                 self.box_scene = BoxScene::QuickClosing {
-                    started: self.now(),
+                    started: self.clock.round() as Millis,
                 };
             }
             self.phase = phase;
@@ -8782,7 +8794,7 @@ impl App {
                             / BOX_BAR_FADE_MS as f32)
                         .clamp(0.0, 1.0),
                     BoxScene::QuickClosing { started } => (1.0
-                        - self.now().saturating_sub(started + BOX_OPEN_MS) as f32
+                        - self.now().saturating_sub(started + BOX_QUICK_MS) as f32
                             / BOX_BAR_FADE_MS as f32)
                         .clamp(0.0, 1.0),
                     BoxScene::Open { .. }
@@ -10604,7 +10616,7 @@ impl App {
         };
         let alpha = self.alert_alpha();
         let (rest, scale) = self.shelf().selected_at(self.canvas());
-        SlotChrome {
+        let chrome = SlotChrome {
             cart,
             face,
             rest,
@@ -10624,8 +10636,12 @@ impl App {
             behind: self.shelf().behind(stem),
             slot: self.slot_faces_for(stem),
             canvas: self.canvas(),
+        };
+        if matches!(self.box_scene, BoxScene::QuickLaunched) {
+            chrome.draw_from_slot(out);
+        } else {
+            chrome.draw(out);
         }
-        .draw(out);
     }
 
     pub fn alert_visible(&self) -> bool {

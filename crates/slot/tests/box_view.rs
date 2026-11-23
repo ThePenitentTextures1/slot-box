@@ -914,30 +914,40 @@ fn picked_up_cartridges_are_in_front_of_the_parked_box() {
 }
 
 #[test]
-fn quick_opening_moves_the_box_behind_the_cartridge_when_the_flap_closes() {
-    let root = common::tmp_root_with_gb_carts(&["Alpha", "Beta"]);
-    let mut app = setup(root.path());
-    common::through(&mut app, Btn::Start);
-    app.update(1.624);
-    let out = frame(&app);
-    let box_at = out
-        .iter()
-        .position(|d| {
-            matches!(d, Draw::PerspectiveQuad { tex, .. }
-        if *tex == textures(1000).front)
-        })
-        .unwrap();
-    let cart_at = out
-        .iter()
-        .position(|d| {
-            matches!(d, Draw::Tex { tex, .. }
-        if *tex == TexId::from_raw(2000))
-        })
-        .unwrap();
-    assert!(box_at < cart_at);
-    assert!(matches!(app.phase(), Phase::Shelf));
-    app.update(0.15);
-    assert!(matches!(app.phase(), Phase::Inserting { .. }));
+fn quick_start_opens_and_lowers_the_box_together_then_inserts_from_the_slot() {
+    for root in [
+        common::tmp_root_with_carts(&["Alpha", "Beta"]),
+        common::tmp_root_with_gb_carts(&["Alpha", "Beta"]),
+        common::tmp_root_with_gbc_carts(&["Alpha", "Beta"]),
+    ] {
+        let mut app = setup(root.path());
+        let front = textures(1000).front;
+        let original = face(&app, front).unwrap();
+        common::through(&mut app, Btn::Start);
+        app.update(0.11);
+        let halfway = frame(&app);
+        let box_half = face(&app, front).unwrap();
+        assert!(box_half[0][1] > original[0][1]);
+        assert!(halfway.iter().any(|d| matches!(
+            d, Draw::Part { tex, .. } if *tex == TexId::from_raw(4000)
+        )));
+        app.update(0.109);
+        assert!(matches!(app.phase(), Phase::Shelf));
+        let before = face(&app, TexId::from_raw(2000)).unwrap();
+        let [x, y, w, h] = slot_ui::aligned_rect(app.canvas(), selected_cart(&app).platform);
+        assert!((before[0][0] - x).abs() < 0.1);
+        assert!((before[0][1] - y).abs() < 0.1);
+        assert!((before[1][0] - before[0][0] - w).abs() < 0.1);
+        assert!((before[3][1] - before[0][1] - h).abs() < 0.1);
+        app.update(0.002);
+        assert!(matches!(app.phase(), Phase::Inserting { .. }));
+        equal_pose(before, face(&app, TexId::from_raw(2000)).unwrap());
+        app.on_core_ready();
+        app.update(0.727);
+        assert!(matches!(app.phase(), Phase::Inserting { .. }));
+        app.update(0.004);
+        assert!(matches!(app.phase(), Phase::Playing { .. }));
+    }
 }
 
 #[test]
@@ -975,12 +985,12 @@ fn quick_launch_and_eject_skip_the_manual_and_return_to_the_carousel() {
         }
         assert!(matches!(app.phase(), Phase::Shelf));
         assert!(face(&app, TexId::from_raw(2000)).is_some());
-        app.update(0.8);
+        app.update(0.11);
         assert!(face(&app, manual).is_none());
         assert!(frame(&app)
             .iter()
             .any(|d| matches!(d, Draw::Part { tex, .. } if *tex == TexId::from_raw(4000))));
-        app.update(1.0);
+        app.update(0.24);
         equal_pose(carousel, face(&app, textures(1000).front).unwrap());
         common::through(&mut app, Btn::Right);
         assert_eq!(app.selected_stem(), Some("Beta"));
@@ -992,7 +1002,7 @@ fn quick_eject_retraces_the_extraction_animation() {
     let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
     let mut app = setup(root.path());
     common::through(&mut app, Btn::Start);
-    app.update(0.97);
+    app.update(0.11);
     let opening_box = face(&app, textures(1000).front).unwrap();
     let opening_cart = face(&app, TexId::from_raw(2000)).unwrap();
     let flap = |app: &App| -> Vec<_> {
@@ -1014,7 +1024,7 @@ fn quick_eject_retraces_the_extraction_animation() {
     };
     let opening_flap = flap(&app);
     assert!(!opening_flap.is_empty());
-    app.update(0.81);
+    app.update(0.111);
     assert!(matches!(app.phase(), Phase::Inserting { .. }));
     app.apply(Action::Eject);
     for _ in 0..200 {
@@ -1024,7 +1034,7 @@ fn quick_eject_retraces_the_extraction_animation() {
         }
     }
     assert!(matches!(app.phase(), Phase::Shelf));
-    app.update(0.8);
+    app.update(0.11);
     equal_pose(opening_box, face(&app, textures(1000).front).unwrap());
     equal_pose(opening_cart, face(&app, TexId::from_raw(2000)).unwrap());
     let closing_flap = flap(&app);
@@ -1317,13 +1327,19 @@ fn flap_unfolds_in_layers_and_folds_back_in_reverse() {
     assert!(lid < outside);
     assert!(part(&folded, 1.0 / 3.0).is_none());
     if let (
-        Draw::Part { y: ly, h: lh, .. },
+        Draw::Part {
+            y: ly,
+            w: lw,
+            h: lh,
+            ..
+        },
         Draw::Part {
             y: ty, h: th, uv, ..
         },
     ) = (&folded[lid], &folded[outside])
     {
-        assert!((ly - ty).abs() < 0.001 && (lh - th).abs() < 0.001);
+        assert!((ly - ty).abs() < 0.001);
+        assert!((th - lw * (88.0 / 700.0)).abs() < 0.001 && th > lh);
         assert!((uv[3] - 1.0 / 3.0).abs() < 0.001);
     } else {
         panic!("expected lid and tab");
@@ -1386,6 +1402,55 @@ fn flap_unfolds_in_layers_and_folds_back_in_reverse() {
     let closing_folded = draw(&app);
     assert!(part(&closing_folded, 0.0).is_some());
     assert!(part(&closing_folded, 1.0 / 3.0).is_none());
+}
+
+#[test]
+fn outer_tab_slides_at_full_height_as_the_lid_folds_and_retraces_on_close() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    let mut app = setup(root.path());
+    let parts = |app: &App| {
+        let draws = frame(app);
+        let part = |v: f32| {
+            draws
+                .iter()
+                .find_map(|draw| match draw {
+                    Draw::Part {
+                        tex, uv, y, w, h, ..
+                    } if *tex == TexId::from_raw(4000) && (uv[1] - v).abs() < 0.0001 => {
+                        Some((*y, *w, *h))
+                    }
+                    _ => None,
+                })
+                .unwrap()
+        };
+        (part(2.0 / 3.0), part(0.0))
+    };
+
+    common::through(&mut app, Btn::A);
+    app.update(0.44);
+    let first = parts(&app);
+    app.update(0.06);
+    let second = parts(&app);
+    app.update(0.025);
+    let third = parts(&app);
+    for (lid, tab) in [first, second, third] {
+        assert!((tab.0 - lid.0).abs() < 0.001);
+        assert!((tab.2 - tab.1 * (88.0 / 700.0)).abs() < 0.001);
+    }
+    let (first_lid, first_tab) = first;
+    let (second_lid, second_tab) = second;
+    let (third_lid, third_tab) = third;
+    assert!(first_lid.2 < second_lid.2 && second_lid.2 < third_lid.2);
+    assert!(first_tab.0 > second_tab.0 && second_tab.0 > third_tab.0);
+
+    app.update(1.255);
+    app.apply(Action::GbaDown(Btn::B));
+    app.update(1.8 * (1.0 - 0.405 / 1.65));
+    let closing = parts(&app);
+    for (opening, closing) in [(third.0, closing.0), (third.1, closing.1)] {
+        assert!((opening.0 - closing.0).abs() < 0.5);
+        assert!((opening.2 - closing.2).abs() < 0.5);
+    }
 }
 
 #[test]

@@ -156,9 +156,9 @@ pub use shot_viewer::{
 };
 pub use silhouette::{gb_silhouette, silhouette, GbShell};
 pub use slot_chrome::{
-    band_y, draw_empty_slot, draw_plugged_slot, draw_slot_back, draw_slot_front, draw_slot_title,
-    ease, edge, housing, opening, recess, seated_rect, slot_name_y, SlotChrome, ALERT_PX, LIP_H,
-    MOUTH_H, MOUTH_W,
+    aligned_rect, band_y, draw_empty_slot, draw_plugged_slot, draw_slot_back, draw_slot_front,
+    draw_slot_title, ease, edge, housing, opening, recess, seated_rect, slot_name_y, SlotChrome,
+    ALERT_PX, LIP_H, MOUTH_H, MOUTH_W,
 };
 pub use sticker::{
     draw_sticker, ds_head_rows, ds_sticker_face, ds_sticker_lines, head_rows, sticker_face,

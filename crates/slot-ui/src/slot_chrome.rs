@@ -84,6 +84,12 @@ pub fn seated_rect(canvas: Canvas, platform: slot_store::Platform) -> [f32; 4] {
     [canvas.w / 2.0 - sw / 2.0, SEATED_Y + drop(canvas), sw, sh]
 }
 
+pub fn aligned_rect(canvas: Canvas, platform: slot_store::Platform) -> [f32; 4] {
+    let (w, h) = seated_box(platform);
+    let (w, h) = (w as f32, h as f32);
+    [canvas.centred(w), band_y(canvas) - h, w, h]
+}
+
 fn catch_at(lip: f32, foot: f32, seated_foot: f32) -> f32 {
     (lip - foot) / (seated_foot - foot)
 }
@@ -112,6 +118,14 @@ pub struct SlotChrome<'a> {
 
 impl SlotChrome<'_> {
     pub fn draw(&self, out: &mut Vec<Draw>) {
+        self.draw_with_start(false, out);
+    }
+
+    pub fn draw_from_slot(&self, out: &mut Vec<Draw>) {
+        self.draw_with_start(true, out);
+    }
+
+    fn draw_with_start(&self, aligned: bool, out: &mut Vec<Draw>) {
         let canvas = self.canvas;
         let seat = self.seat.clamp(0.0, 1.0);
         let dim = self.dim.clamp(0.0, 1.0);
@@ -145,7 +159,11 @@ impl SlotChrome<'_> {
         let (sw, sh) = (sw as f32, sh as f32);
         let (foot0, seated_foot) = (foot_y(canvas, ch), SEATED_Y + drop(canvas) + sh);
         let catch = catch_at(LIP_Y + drop(canvas), foot0, seated_foot);
-        let travel = travel(seat, catch);
+        let travel = if aligned {
+            catch + (1.0 - catch) * travel(seat, catch)
+        } else {
+            travel(seat, catch)
+        };
         let k = (travel / catch).min(1.0);
         let (cw, ch) = (w0 + (sw - w0) * k, h0 + (sh - h0) * k);
         let centre = self.rest + w0 / 2.0;

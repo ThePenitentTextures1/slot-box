@@ -1,5 +1,53 @@
 use super::*;
 
+fn draw_flap(
+    tex: Option<TexId>,
+    center: [f32; 2],
+    w: f32,
+    h: f32,
+    lid: f32,
+    tab: f32,
+    out: &mut Vec<Draw>,
+) {
+    let Some(tex) = tex.filter(|_| lid > 0.001) else {
+        return;
+    };
+    let full_lid_h = w * (88.0 / 700.0);
+    let lid_h = full_lid_h * lid;
+    let hinge_y = center[1] - h / 2.0 - lid_h;
+    out.push(Draw::Part {
+        x: center[0] - w / 2.0,
+        y: hinge_y,
+        w,
+        h: lid_h,
+        tex,
+        alpha: 1.0,
+        uv: [0.0, 2.0 / 3.0, 1.0, 1.0 / 3.0],
+    });
+    let fold = (std::f32::consts::PI * tab).cos();
+    if fold.abs() > 0.001 {
+        let tab_h = if fold < 0.0 {
+            -fold * lid_h
+        } else {
+            fold * full_lid_h
+        };
+        out.push(Draw::Part {
+            x: center[0] - w / 2.0,
+            y: if fold < 0.0 { hinge_y - tab_h } else { hinge_y },
+            w,
+            h: tab_h,
+            tex,
+            alpha: 1.0,
+            uv: [
+                0.0,
+                if fold < 0.0 { 1.0 / 3.0 } else { 0.0 },
+                1.0,
+                1.0 / 3.0,
+            ],
+        });
+    }
+}
+
 fn manual_page_size(canvas: slot_gfx::Canvas) -> (f32, f32) {
     let height = canvas.h - MOUTH_H;
     (height * 115.0 / 85.0, height)
@@ -206,7 +254,9 @@ impl App {
                     return;
                 }
                 BoxScene::QuickOpening { .. } => {
-                    self.box_scene = BoxScene::QuickOpening { started: now };
+                    self.box_scene = BoxScene::QuickOpening {
+                        started: self.clock.round() as Millis,
+                    };
                     return;
                 }
                 _ => {}
@@ -223,7 +273,8 @@ impl App {
             }
             return;
         }
-        if matches!(self.box_scene, BoxScene::QuickOpening { started } if now.saturating_sub(started) >= BOX_BAR_FADE_MS + BOX_OPEN_MS)
+        let quick_now = self.clock.round() as Millis;
+        if matches!(self.box_scene, BoxScene::QuickOpening { started } if quick_now.saturating_sub(started) >= BOX_QUICK_MS)
         {
             self.box_scene = BoxScene::QuickLaunched;
             self.insert(self.box_quick_clean);
@@ -267,7 +318,7 @@ impl App {
                 BoxScene::Carousel
             }
             BoxScene::QuickClosing { started }
-                if now.saturating_sub(started) >= BOX_OPEN_MS + BOX_BAR_FADE_MS =>
+                if quick_now.saturating_sub(started) >= BOX_QUICK_MS + BOX_BAR_FADE_MS =>
             {
                 BoxScene::Carousel
             }
@@ -295,7 +346,7 @@ impl App {
         self.shelf_mut().release_hold();
         self.box_scene = if quick {
             BoxScene::QuickOpening {
-                started: self.now(),
+                started: self.clock.round() as Millis,
             }
         } else {
             BoxScene::Opening {
@@ -1151,18 +1202,26 @@ impl App {
                     out,
                 );
             }
-            BoxScene::Opening { started } | BoxScene::QuickOpening { started } => {
+            BoxScene::Opening { started } => {
                 let t = (now.saturating_sub(started + BOX_BAR_FADE_MS) as f32 / BOX_OPEN_MS as f32)
                     .clamp(0.0, 1.0);
                 self.draw_open_box(t, out);
+            }
+            BoxScene::QuickOpening { started } => {
+                let t = ((self.clock.round() as Millis).saturating_sub(started) as f32
+                    / BOX_QUICK_MS as f32)
+                    .clamp(0.0, 1.0);
+                self.draw_quick_box(t, out);
             }
             BoxScene::Closing { started } => {
                 let t = (now.saturating_sub(started) as f32 / BOX_CLOSE_MS as f32).clamp(0.0, 1.0);
                 self.draw_open_box(1.0 - t, out);
             }
             BoxScene::QuickClosing { started } => {
-                let t = (now.saturating_sub(started) as f32 / BOX_OPEN_MS as f32).clamp(0.0, 1.0);
-                self.draw_open_box(1.0 - t, out);
+                let t = ((self.clock.round() as Millis).saturating_sub(started) as f32
+                    / BOX_QUICK_MS as f32)
+                    .clamp(0.0, 1.0);
+                self.draw_quick_box(1.0 - t, out);
             }
             BoxScene::Open { .. } | BoxScene::PreparingClose { .. } => self.draw_open_box(1.0, out),
             BoxScene::QuickLaunched => self.draw_open_box(1.0, out),
@@ -1188,6 +1247,63 @@ impl App {
             }
         }
         true
+    }
+
+    fn draw_quick_box(&self, progress: f32, out: &mut Vec<Draw>) {
+        let Some((cart, faces, (front_w, front_h, depth))) = self.selected_box() else {
+            return;
+        };
+        let canvas = self.canvas();
+        let t = progress.clamp(0.0, 1.0);
+        let smooth = |t: f32| {
+            let t = t.clamp(0.0, 1.0);
+            t * t * (3.0 - 2.0 * t)
+        };
+        let move_box = slot_ui::ease(t);
+        let origin = if matches!(self.box_scene, BoxScene::QuickClosing { .. }) {
+            let (center, scale, angle) = self.shelf().selected_box_pose(canvas);
+            boxview::BoxPose {
+                center,
+                scale,
+                angle,
+            }
+        } else {
+            self.box_open_from
+        };
+        let scale = origin.scale + (slot_ui::BOX_VIEW_SCALE - origin.scale) * move_box;
+        let (w, h) = (front_w * scale, front_h * scale);
+        let center = [
+            origin.center[0] + (canvas.w / 2.0 - origin.center[0]) * move_box,
+            origin.center[1]
+                + (canvas.h
+                    + front_h * slot_ui::BOX_VIEW_SCALE / 2.0
+                    + front_w * slot_ui::BOX_VIEW_SCALE * (176.0 / 700.0)
+                    - origin.center[1])
+                    * move_box,
+        ];
+        let lid = (std::f32::consts::FRAC_PI_2 * smooth(t * 2.0)).sin();
+        let tab = smooth((t - 0.5) * 2.0);
+        draw_flap(faces.flap, center, w, h, lid, tab, out);
+        let target = slot_ui::aligned_rect(canvas, cart.platform);
+        let (small_w, small_h) = slot_ui::loose_cart_dimensions(cart);
+        let small_w = small_w * origin.scale;
+        let small_h = small_h * origin.scale;
+        let start = [
+            origin.center[0] - small_w / 2.0,
+            origin.center[1] - small_h / 2.0,
+            small_w,
+            small_h,
+        ];
+        let rect = std::array::from_fn(|i| start[i] + (target[i] - start[i]) * move_box);
+        self.shelf().draw_cart_at(self.shelf().index, rect, out);
+        slot_ui::draw_rotated_box(
+            faces,
+            (w, h, depth * scale),
+            origin.angle * (1.0 - move_box),
+            center,
+            1.0,
+            out,
+        );
     }
 
     pub(super) fn draw_open_box(&self, progress: f32, out: &mut Vec<Draw>) {
@@ -1257,43 +1373,7 @@ impl App {
         let cart_center_y = cy + (target_y + manual_shift - cy) * move_to_center;
         let face_scale = (origin.scale + (scale - origin.scale) * travel) * zoom;
         let angle = origin.angle * (1.0 - travel) + self.box_turn * travel;
-        let flap_tex = faces.flap.filter(|_| lid > 0.001);
-        let lid_h = w * (88.0 / 700.0) * lid;
-        let hinge_y = center[1] - h / 2.0 - lid_h;
-        if let Some(tex) = flap_tex {
-            out.push(Draw::Part {
-                x: center[0] - w / 2.0,
-                y: hinge_y,
-                w,
-                h: lid_h,
-                tex,
-                alpha: 1.0,
-                uv: [0.0, 2.0 / 3.0, 1.0, 1.0 / 3.0],
-            });
-            let fold = (std::f32::consts::PI * tab).cos();
-            if fold < -0.001 {
-                let tab_h = -fold * lid_h;
-                out.push(Draw::Part {
-                    x: center[0] - w / 2.0,
-                    y: hinge_y - tab_h,
-                    w,
-                    h: tab_h,
-                    tex,
-                    alpha: 1.0,
-                    uv: [0.0, 1.0 / 3.0, 1.0, 1.0 / 3.0],
-                });
-            } else if fold > 0.001 {
-                out.push(Draw::Part {
-                    x: center[0] - w / 2.0,
-                    y: hinge_y,
-                    w,
-                    h: fold * lid_h,
-                    tex,
-                    alpha: 1.0,
-                    uv: [0.0, 0.0, 1.0, 1.0 / 3.0],
-                });
-            }
-        }
+        draw_flap(faces.flap, center, w, h, lid, tab, out);
         let draw_box = |out: &mut Vec<Draw>| {
             slot_ui::draw_rotated_box(
                 faces,
@@ -1481,6 +1561,9 @@ impl App {
         };
         let canvas = self.canvas();
         let scale = slot_ui::BOX_VIEW_SCALE;
+        if matches!(self.box_scene, BoxScene::QuickLaunched) {
+            return;
+        }
         if !matches!(
             self.box_scene,
             BoxScene::QuickOpening { .. } | BoxScene::QuickLaunched | BoxScene::QuickClosing { .. }
