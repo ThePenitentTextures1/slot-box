@@ -146,6 +146,128 @@ fn a_kid_mode_card_boots_locked() {
 }
 
 #[test]
+fn locked_kid_mode_allows_box_and_manual_navigation_but_not_editing() {
+    for mode in [KidMode::OneShelf, KidMode::Shelves] {
+        box_navigation_in_kid_mode(mode);
+    }
+}
+
+fn box_navigation_in_kid_mode(mode: KidMode) {
+    let d = card();
+    slot_store::write_carousel_view(d.path(), slot_store::CarouselView::Boxes).unwrap();
+    let (mut a, _clock) = boot_on(&d, kid(mode));
+    for want in a.box_face_wants() {
+        a.set_box_faces(
+            want.shelf,
+            want.index,
+            Some(slot_ui::BoxFaceTextures {
+                front: slot_ui::TexId::from_raw(1000),
+                side: slot_ui::TexId::from_raw(1001),
+                back: slot_ui::TexId::from_raw(1002),
+                flap: None,
+                front_size: (100, 100),
+                side_size: (20, 100),
+                back_size: (100, 100),
+                japanese: false,
+                pivot: [120.0, 50.0],
+                front_center: [170.0, 50.0],
+            }),
+        );
+    }
+    common::through(&mut a, Btn::Select);
+    settle(&mut a);
+    press(&mut a, Btn::A);
+    settle(&mut a);
+    let mut draws = Vec::new();
+    a.draw(&mut draws);
+    assert!(draws.iter().any(|d| matches!(d, slot_ui::Draw::PerspectiveQuad { tex, .. } if *tex == slot_ui::TexId::from_raw(1002))));
+    press(&mut a, Btn::B);
+    settle(&mut a);
+    press(&mut a, Btn::A);
+    assert!(matches!(a.phase(), Phase::Shelf));
+    let cart = a.manual_cover_want().expect("open box requests its manual");
+    a.set_manual_cover(Some((cart, slot_ui::TexId::from_raw(3000))));
+    a.set_manual_page_count(4);
+    a.set_manual_page_sizes((0..4).map(|i| (i, 1200, 844)).collect());
+    a.set_manual_page_textures(vec![
+        (1, slot_ui::TexId::from_raw(3001)),
+        (2, slot_ui::TexId::from_raw(3002)),
+    ]);
+    settle(&mut a);
+    common::through(&mut a, Btn::Select);
+    common::through(&mut a, Btn::Start);
+    a.apply(Action::QuickMenu);
+    assert!(a.studio().is_none());
+    assert!(a.core_picker().is_none());
+    assert!(a.quick_menu().is_none());
+    press(&mut a, Btn::Down);
+    settle(&mut a);
+    common::through(&mut a, Btn::Select);
+    settle(&mut a);
+    let mut draws = Vec::new();
+    a.draw(&mut draws);
+    assert!(draws.iter().any(|d| matches!(d, slot_ui::Draw::PerspectiveQuad { tex, .. } if *tex == slot_ui::TexId::from_raw(1000))));
+    press(&mut a, Btn::B);
+    settle(&mut a);
+    press(&mut a, Btn::Up);
+    settle(&mut a);
+    press(&mut a, Btn::Up);
+    settle(&mut a);
+    press(&mut a, Btn::A);
+    settle(&mut a);
+    assert!(!a.manual_page_wants().is_empty());
+    let cover_width = |a: &App| {
+        let mut draws = Vec::new();
+        a.draw(&mut draws);
+        draws
+            .iter()
+            .find_map(|d| match d {
+                slot_ui::Draw::PerspectiveQuad { tex, corners, .. }
+                    if *tex == slot_ui::TexId::from_raw(3000) =>
+                {
+                    Some(corners[1][0] - corners[0][0])
+                }
+                slot_ui::Draw::Tex { tex, w, .. } if *tex == slot_ui::TexId::from_raw(3000) => {
+                    Some(*w)
+                }
+                _ => None,
+            })
+            .unwrap()
+    };
+    let before = cover_width(&a);
+    let mut gestures = slot_input::Gestures::new();
+    gestures.set_entries(a.binding_table().entries());
+    gestures.set_context(a.input_context());
+    for action in gestures.feed(slot_input::RawEvent::Down(Btn::R1), a.now()) {
+        a.apply(action);
+    }
+    a.update(0.5);
+    for action in gestures.feed(slot_input::RawEvent::Up(Btn::R1), a.now()) {
+        a.apply(action);
+    }
+    assert!(cover_width(&a) > before);
+    press(&mut a, Btn::B);
+    settle(&mut a);
+    common::through(&mut a, Btn::Right);
+    settle(&mut a);
+    let mut draws = Vec::new();
+    a.draw(&mut draws);
+    assert!(draws.iter().any(|d| matches!(d, slot_ui::Draw::PerspectiveQuad { tex, .. } | slot_ui::Draw::Tex { tex, .. } if *tex == slot_ui::TexId::from_raw(3001))));
+    press(&mut a, Btn::B);
+    settle(&mut a);
+    press(&mut a, Btn::B);
+    settle(&mut a);
+    assert!(a.manual_cover_want().is_none());
+    assert!(matches!(a.phase(), Phase::Shelf));
+    press(&mut a, Btn::A);
+    settle(&mut a);
+    press(&mut a, Btn::A);
+    settle(&mut a);
+    assert!(matches!(a.phase(), Phase::Inserting { .. }));
+    assert!(!a.starting_clean());
+}
+
+#[test]
 fn unlocked_steps_between_modes_without_asking() {
     let d = card();
     let (mut a, _clock) = boot_on(&d, kid(KidMode::OneShelf));

@@ -1,18 +1,91 @@
 # The Shelf
 
-## Getting around
+## Cartridge View controls
+
+These are the default shelf controls. The collection controls also apply to
+games on the Box View carousel. The four shelf bindings can be changed in
+Settings → Controls → Shelf.
+
+### Game as a collection item
 
 | Button | Does |
 | --- | --- |
 | <kbd>Left</kbd> / <kbd>Right</kbd> | Move along the shelf |
 | <kbd>Up</kbd> / <kbd>Down</kbd> | Jump to the previous or next letter |
 | <kbd>L1</kbd> / <kbd>R1</kbd> | Switch shelves |
-| <kbd>Y</kbd> | Favorite / unfavorite the cart you're on |
-| <kbd>X</kbd> | Take the cart you're on off Recents |
-| <kbd>A</kbd> | Insert the cart |
-| <kbd>Hold A</kbd> | Insert the cart and don't auto load the save state |
-| <kbd>START</kbd> | Choose the emulator (GBA only) |
+| <kbd>Y</kbd> | Favorite / unfavorite the selected game |
+| <kbd>X</kbd> | Remove the selected game from Recents, when on the Recents shelf |
+| <kbd>L2</kbd> / <kbd>R2</kbd> | Previous / next collection on Favorites |
+| Hold <kbd>Y</kbd> | Add or remove a game from a collection |
+| Hold <kbd>SELECT</kbd> | Select games to add to a collection |
+
+### Game as a playable cartridge
+
+| Button | Does |
+| --- | --- |
+| Tap <kbd>A</kbd> | Insert the cartridge, using Resume on Insert |
+| Hold <kbd>A</kbd> | Insert the cartridge without auto-loading a save state |
+| <kbd>START</kbd> | Choose the emulator |
+| <kbd>SELECT</kbd> | Open Cartridge Studio |
+
+These cartridge actions apply to a selected cartridge in Cartridge View or
+Open Box View. <kbd>B</kbd> has no action on the Cartridge View carousel.
+
+### Slot controls
+
+| Button | Does |
+| --- | --- |
 | <kbd>MENU</kbd> | Open settings |
+
+Volume, display, power, and other system shortcuts are separate from the
+selected game; see [Controls](controls.md).
+
+## Box View
+
+Choose **Carousel View** in Settings to switch between **Cartridge View**
+(the default) and **Box View**. When Box View is selected and a game has box
+art, the carousel has these box-specific controls in addition to the collection controls:
+
+| Button | Does |
+| --- | --- |
+| Tap <kbd>A</kbd> | Open the box and its contents |
+| Hold <kbd>A</kbd> | Skip Open Box View and start fresh |
+| <kbd>START</kbd> | Skip Open Box View and play using Resume on Insert |
+| <kbd>SELECT</kbd> | Inspect the box |
+| <kbd>B</kbd> | No action on the carousel; returns to it from Open Box View |
+
+Ejecting a quick-started game puts its cartridge away and returns to the carousel.
+The initially selected box's contents load before Box View becomes interactive.
+Artwork for neighboring boxes loads in the background. If artwork for a
+newly selected box is still loading when it is opened or inspected, the
+carousel shows a loading indicator; press <kbd>B</kbd> to cancel.
+
+The cartridge is selected first in Open Box View. Press <kbd>Down</kbd> to select the box and
+<kbd>Up</kbd> to return to the cartridge. When a manual is available, press
+<kbd>Up</kbd> from the cartridge to select its cover, and <kbd>Down</kbd> to
+return. With the cartridge selected, the
+cartridge controls above apply. Open the box to change the emulator or use
+Cartridge Studio. Games without box art retain the regular cartridge controls
+directly on the carousel.
+While Kid Mode is locked, boxes and manuals can still be inspected, but
+Cartridge Studio, the emulator picker and settings remain locked.
+
+With the manual selected, press <kbd>A</kbd> to pick it up. Hold
+<kbd>Left</kbd> or <kbd>Right</kbd> to pan across a spread. Double-tap a
+direction, or tap it at the outer edge, to turn to the next or previous spread.
+Hold <kbd>R1</kbd> or <kbd>L1</kbd> to zoom; while zoomed, directions pan
+instead of turning pages, including vertically. Zoom is limited to 2× and
+the loaded pages' native resolution. On devices with a left stick,
+it can also pan while zoomed. <kbd>B</kbd> resets the zoom, or closes and
+puts down the manual at normal size. Missing manuals leave the cartridge as
+the topmost item.
+
+With the box selected, <kbd>A</kbd> or <kbd>SELECT</kbd> opens the same
+inspection view as <kbd>SELECT</kbd> on the carousel. It opens on the front;
+press <kbd>A</kbd> or <kbd>SELECT</kbd> to flip to the back, if available.
+On the back, hold <kbd>R1</kbd> or <kbd>L1</kbd> to zoom and directions to
+pan. Zoom stops when the back fills the screen width, even for smaller images.
+The front cannot be zoomed. <kbd>B</kbd> returns to the previous view.
 
 ## The shelves
 

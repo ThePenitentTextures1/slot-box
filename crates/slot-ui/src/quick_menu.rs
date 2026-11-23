@@ -30,6 +30,7 @@ pub enum QuickRow {
     ShowTitles,
     KidMode,
     KidShelf,
+    BoxView,
     WallpaperTint,
     GbcShader,
     GbcColourCorrection,
@@ -149,7 +150,7 @@ pub enum QuickRow {
 }
 
 impl QuickRow {
-    pub const ALL: [QuickRow; 135 + cfg!(feature = "nds") as usize] = [
+    pub const ALL: [QuickRow; 136 + cfg!(feature = "nds") as usize] = [
         QuickRow::FastForward,
         QuickRow::FastForwardSound,
         QuickRow::Screen,
@@ -171,6 +172,7 @@ impl QuickRow {
         QuickRow::ShowTitles,
         QuickRow::KidMode,
         QuickRow::KidShelf,
+        QuickRow::BoxView,
         QuickRow::WallpaperTint,
         QuickRow::GbcShader,
         QuickRow::GbcColourCorrection,
@@ -298,7 +300,7 @@ impl QuickRow {
         QuickRow::System,
     ];
 
-    pub const GENERAL: [QuickRow; 8] = [
+    pub const GENERAL: [QuickRow; 9] = [
         QuickRow::Theme,
         QuickRow::Wallpaper,
         QuickRow::WallpaperTint,
@@ -307,6 +309,7 @@ impl QuickRow {
         QuickRow::ShowTitles,
         QuickRow::KidMode,
         QuickRow::KidShelf,
+        QuickRow::BoxView,
     ];
 
     pub const SYSTEM: [QuickRow; 7] = [
@@ -547,6 +550,7 @@ impl QuickRow {
             | QuickRow::ShelfMode
             | QuickRow::ShowTitles
             | QuickRow::KidMode
+            | QuickRow::BoxView
             | QuickRow::KidShelf => &QuickRow::GENERAL,
             QuickRow::Wifi
             | QuickRow::DateTime
@@ -715,6 +719,7 @@ impl QuickRow {
             QuickRow::Recents => "Recents",
             QuickRow::ShelfMode => "Shelf Mode",
             QuickRow::ShowTitles => "Game Titles",
+            QuickRow::BoxView => "Carousel View",
             QuickRow::WallpaperTint => "Wallpaper Tint",
             QuickRow::Resume => "Resume",
             QuickRow::UndoSave => "Undo Save",
@@ -998,10 +1003,12 @@ pub enum QuickValue {
     Both,
     Icon,
     Percentage,
+    BoxView,
+    CartridgeView,
 }
 
 impl QuickValue {
-    pub const ALL: [QuickValue; 57] = [
+    pub const ALL: [QuickValue; 59] = [
         QuickValue::Speed1_5,
         QuickValue::Speed2,
         QuickValue::Speed3,
@@ -1059,6 +1066,8 @@ impl QuickValue {
         QuickValue::Both,
         QuickValue::Icon,
         QuickValue::Percentage,
+        QuickValue::BoxView,
+        QuickValue::CartridgeView,
     ];
 
     pub const LEVELS: [QuickValue; 16] = [
@@ -1152,6 +1161,8 @@ impl QuickValue {
             QuickValue::Ghosting => "Ghosting",
             QuickValue::Https => "HTTPS",
             QuickValue::Http => "HTTP",
+            QuickValue::BoxView => "Box View",
+            QuickValue::CartridgeView => "Cartridge View",
         }
     }
 

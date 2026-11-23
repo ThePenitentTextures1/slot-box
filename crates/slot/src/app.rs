@@ -1,3 +1,6 @@
+#[path = "app_box_view.rs"]
+mod box_presentation;
+
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -26,6 +29,7 @@ use crate::art::jobs::{no_art_jobs, ArtEvent, ArtJob, ArtJobs};
 use crate::art::make::Kind as ArtKind;
 use crate::audio::Sfx;
 use crate::ble::{Ble, BleWant, Heard};
+use crate::boxview::{self, BoxItem, BoxScene};
 use crate::core_picker::{Chip, CorePicker, Outcome, Press};
 use crate::fetch_art::{
     stage_at, FetchArt, FetchTex, Landed as ArtLanded, Run as ArtRun, Scene as ArtScene, Stage,
@@ -48,7 +52,8 @@ use crate::update::{
 use crate::video_mode::{self, VideoMode};
 use slot_store::{
     read_carousel, read_controls, read_shortcuts, write_carousel, write_controls, write_shortcuts,
-    Binding, CarouselKeys, Controls, Device, GameButton, Modifier, ShortcutKeys, LID_OFF_MIN,
+    Binding, CarouselKeys, CarouselView, Controls, Device, GameButton, Modifier, ShortcutKeys,
+    LID_OFF_MIN,
 };
 
 pub const RECORDING: &str = "Recording";
@@ -112,6 +117,12 @@ pub const UNDO_GRACE_MS: Millis = 30_000;
 pub const LINK_LOST_MS: Millis = 2000;
 
 const PLAY_HOLD_MS: Millis = 500;
+#[derive(Copy, Clone)]
+enum BoxCartAction {
+    Play(bool),
+    Picker,
+    Studio,
+}
 
 const SHUTDOWN_SHOW_MS: Millis = 250;
 
@@ -124,6 +135,13 @@ const SLOT_NAME_HOLD_MS: Millis = 1200;
 const SLOT_NAME_OUT_MS: Millis = 800;
 const SLOT_NAME_ALPHA: f32 = 1.0;
 const CORE_PICKER_DIM: f32 = 0.25 / (1.0 - CORE_PICKER_RECEDE);
+const BOX_FLIP_MS: Millis = 320;
+const BOX_BAR_FADE_MS: Millis = 120;
+const BOX_OPEN_MS: Millis = 1650;
+const BOX_CLOSE_MS: Millis = 1800;
+const BOX_FOCUS_SPEED: f32 = 1.0 / 0.6;
+const BOX_FOCUS_CART_DOWN: f32 = 150.0 / 600.0;
+const BOX_FOCUS_BOX_MOVE: f32 = 320.0 / 600.0;
 const LINK_TEXT_Y: f32 = 44.0;
 const EDIT_DIM: [f32; 4] = [0.043, 0.043, 0.059, 0.38];
 const PART_PUSH: f32 = 300.0;
@@ -701,6 +719,27 @@ pub struct App {
     plugged_face: Option<TexId>,
     binding_faces: HashMap<String, [(TexId, u32, u32); 2]>,
     carousel: CarouselKeys,
+    carousel_view: CarouselView,
+    box_scene: BoxScene,
+    box_inspection_from_open: bool,
+    box_detail_loading: bool,
+    box_cart_loading: bool,
+    box_open_from: boxview::BoxPose,
+    manual_cover: Option<(Cart, TexId)>,
+    manual_page_count: usize,
+    manual_page_textures: Vec<(usize, TexId)>,
+    manual_page_sizes: Vec<(usize, u32, u32)>,
+    manual_reader: Option<boxview::ManualReader>,
+    box_focus: f32,
+    box_zoom: f32,
+    box_pan: [f32; 2],
+    box_turn: f32,
+    box_back: bool,
+    box_buttons: [bool; 6],
+    box_quick_clean: bool,
+    box_resetting: bool,
+    box_pending: Option<BoxCartAction>,
+    open_box_legends: [Vec<(TexId, u32)>; 2],
     shortcuts: ShortcutKeys,
     vol_before: Vec<(u8, bool, Millis)>,
     snapshot: Option<Box<dyn Snapshot>>,
@@ -1000,7 +1039,7 @@ pub(crate) fn shift_down(draws: &mut [Draw], dy: f32) {
             | Draw::Tex { y, .. }
             | Draw::Part { y, .. }
             | Draw::Turned { y, .. } => *y += dy,
-            Draw::Quad { corners, .. } => {
+            Draw::Quad { corners, .. } | Draw::PerspectiveQuad { corners, .. } => {
                 for c in corners {
                     c[1] += dy;
                 }
@@ -1236,6 +1275,31 @@ impl App {
             plugged_face: None,
             binding_faces: HashMap::new(),
             carousel: CarouselKeys::default(),
+            carousel_view: CarouselView::default(),
+            box_scene: BoxScene::Carousel,
+            box_inspection_from_open: false,
+            box_detail_loading: false,
+            box_cart_loading: false,
+            box_open_from: boxview::BoxPose {
+                center: [0.0, 0.0],
+                scale: slot_ui::BOX_VIEW_SCALE,
+                angle: 0.0,
+            },
+            manual_cover: None,
+            manual_page_count: 0,
+            manual_page_textures: Vec::new(),
+            manual_page_sizes: Vec::new(),
+            manual_reader: None,
+            box_focus: 0.0,
+            box_zoom: 1.0,
+            box_pan: [0.0, 0.0],
+            box_turn: 0.0,
+            box_back: false,
+            box_buttons: [false; 6],
+            box_quick_clean: false,
+            box_resetting: false,
+            box_pending: None,
+            open_box_legends: [Vec::new(), Vec::new()],
             shortcuts: ShortcutKeys::default(),
             vol_before: Vec::new(),
             snapshot: None,
@@ -1384,6 +1448,8 @@ impl App {
         app.romm = crate::romm::RommConf::load(root);
         app.gifts = crate::romm::Gifts::load(root);
         app.carousel = read_carousel(root);
+        app.carousel_view = slot_store::read_carousel_view(root);
+        app.apply_carousel_view();
         app.shortcuts = read_shortcuts(root);
         app.controls = read_controls(root);
         if turbo_off {
@@ -1584,6 +1650,13 @@ impl App {
     }
 
     fn repeats(&self, btn: Btn) -> bool {
+        if self.carousel_view == CarouselView::Boxes
+            && self.box_scene != BoxScene::Carousel
+            && self.core_picker.is_none()
+            && self.studio.is_none()
+        {
+            return false;
+        }
         let vertical = matches!(btn, Btn::Up | Btn::Down);
         let direction = vertical || matches!(btn, Btn::Left | Btn::Right);
         if let Some((kb, _)) = &self.keyboard {
@@ -2934,6 +3007,10 @@ impl App {
                 BatteryDisplay::Icon => QuickValue::Icon,
                 BatteryDisplay::Percent => QuickValue::Percentage,
             }),
+            QuickRow::BoxView => Some(match self.carousel_view {
+                CarouselView::Boxes => QuickValue::BoxView,
+                CarouselView::Cartridges => QuickValue::CartridgeView,
+            }),
             QuickRow::WallpaperTint => Some(match self.state.wallpaper_tint {
                 WallpaperTint::Off => QuickValue::Off,
                 WallpaperTint::Low => QuickValue::Low,
@@ -4056,21 +4133,49 @@ impl App {
 
     pub fn face_wants(&self) -> Vec<FaceWant> {
         let here = self.shelf();
-        let screen = here.on_screen();
+        let box_radius = (self.carousel_view == CarouselView::Boxes)
+            .then(|| Shelf::box_visible_radius(self.canvas()));
+        let screen = box_radius.map_or_else(|| here.on_screen(), |radius| here.around(radius));
         let mut wants: Vec<(usize, usize)> = screen.iter().map(|i| (self.shelf_at, *i)).collect();
         for at in self.neighbour_shelves() {
-            wants.extend(self.shelves[at].1.on_screen().into_iter().map(|i| (at, i)));
+            let shelf = &self.shelves[at].1;
+            let nearby =
+                box_radius.map_or_else(|| shelf.on_screen(), |radius| shelf.around(radius));
+            wants.extend(nearby.into_iter().map(|i| (at, i)));
         }
         wants.extend(
-            here.around(FACE_AHEAD)
+            here.around(box_radius.map_or(FACE_AHEAD, |radius| FACE_AHEAD.max(radius + 2)))
                 .into_iter()
                 .filter(|i| !screen.contains(i))
                 .map(|i| (self.shelf_at, i)),
         );
-        wants.extend(self.bundle_seats());
+        let bundle = self.bundle_seats();
+        let box_prefetch = self.box_prefetch_wants();
+        wants.extend(bundle.iter().copied());
         wants
             .into_iter()
-            .filter(|(at, i)| self.shelves[*at].1.face(*i).is_none())
+            .filter(|(at, i)| {
+                let shelf = &self.shelves[*at].1;
+                let selected = *at == self.shelf_at && *i == shelf.index;
+                shelf.face(*i).is_none()
+                    && (self.carousel_view != CarouselView::Boxes
+                        || crate::box_art_fetch::system_id(shelf.carts[*i].platform).is_none()
+                        || bundle.contains(&(*at, *i))
+                        || box_prefetch.contains(&(*at, *i))
+                        || (selected
+                            && (matches!(
+                                self.box_scene,
+                                BoxScene::Opening { .. }
+                                    | BoxScene::Open { .. }
+                                    | BoxScene::PreparingClose { .. }
+                                    | BoxScene::Closing { .. }
+                                    | BoxScene::QuickOpening { .. }
+                                    | BoxScene::QuickLaunched
+                                    | BoxScene::QuickClosing { .. }
+                            ) || self.kid_locked()
+                                || !self.on_shelf()))
+                        || (shelf.box_checked(*i) && shelf.box_faces(*i).is_none()))
+            })
             .map(|(shelf, index)| FaceWant {
                 shelf,
                 index,
@@ -4081,6 +4186,15 @@ impl App {
 
     pub fn face_cart(&self, shelf: usize, index: usize) -> Option<&Cart> {
         self.shelves.get(shelf)?.1.carts.get(index)
+    }
+
+    pub fn set_box_faces(
+        &mut self,
+        shelf: usize,
+        index: usize,
+        faces: Option<slot_ui::BoxFaceTextures>,
+    ) -> Option<slot_ui::BoxFaceTextures> {
+        self.shelves.get_mut(shelf)?.1.set_box_faces(index, faces)
     }
 
     pub fn set_cart_face(&mut self, shelf: usize, index: usize, tex: TexId) -> Option<TexId> {
@@ -4094,12 +4208,14 @@ impl App {
     pub fn shed_faces(&mut self) -> Vec<TexId> {
         let neighbours = self.neighbour_shelves();
         let bundle = self.bundle_seats();
+        let box_radius = (self.carousel_view == CarouselView::Boxes)
+            .then(|| Shelf::box_visible_radius(self.canvas()));
         let mut shed = std::mem::take(&mut self.orphaned);
         for (at, (_, shelf)) in self.shelves.iter_mut().enumerate() {
             let mut keep = if at == self.shelf_at {
-                shelf.around(FACE_KEEP)
+                shelf.around(box_radius.map_or(FACE_KEEP, |radius| FACE_KEEP.max(radius + 2)))
             } else if neighbours.contains(&at) {
-                shelf.on_screen()
+                box_radius.map_or_else(|| shelf.on_screen(), |radius| shelf.around(radius))
             } else {
                 Vec::new()
             };
@@ -4940,7 +5056,12 @@ impl App {
     }
 
     pub fn left_stick_dpad(&self) -> bool {
-        self.left_stick && self.state.left_stick_dpad
+        self.left_stick
+            && (self.state.left_stick_dpad
+                || self
+                    .manual_reader
+                    .as_ref()
+                    .is_some_and(|reader| reader.zoom > 1.001))
     }
 
     pub fn ff_speed(&self) -> u8 {
@@ -5939,6 +6060,12 @@ impl App {
                 return;
             };
             self.invite_return = Some(self.here());
+            self.box_scene = BoxScene::Carousel;
+            self.manual_reader = None;
+            self.box_pending = None;
+            self.box_detail_loading = false;
+            self.box_cart_loading = false;
+            self.box_buttons = [false; 6];
             self.sit(seat);
             self.insert(false);
         }
@@ -6064,16 +6191,39 @@ impl App {
         self.lock_kid_on_close();
         let action = match self.kid_locked() {
             true => {
-                let at = match self.phase {
-                    _ if self.invite.is_some() => crate::kid::KidWhere::Invite,
-                    Phase::Shelf => crate::kid::KidWhere::Shelf,
-                    Phase::Playing { .. } => crate::kid::KidWhere::Playing,
-                    _ => crate::kid::KidWhere::Other,
-                };
-                match crate::kid::allowed(at, self.state.kid_mode, action) {
-                    Some(Action::Eject) if self.single_cart() => return,
-                    Some(kept) => kept,
-                    None => return,
+                let box_navigation = self.on_shelf()
+                    && self.invite.is_none()
+                    && self.carousel_view == CarouselView::Boxes
+                    && self.selected_box().is_some()
+                    && match action {
+                        Action::SelectTap => {
+                            matches!(
+                                self.box_scene,
+                                BoxScene::Carousel
+                                    | BoxScene::Back { .. }
+                                    | BoxScene::Open { item: BoxItem::Box }
+                            )
+                        }
+                        Action::GbaDown(Btn::B | Btn::L1 | Btn::R1)
+                        | Action::GbaUp(Btn::B | Btn::L1 | Btn::R1) => {
+                            self.box_scene != BoxScene::Carousel
+                        }
+                        _ => false,
+                    };
+                if box_navigation {
+                    action
+                } else {
+                    let at = match self.phase {
+                        _ if self.invite.is_some() => crate::kid::KidWhere::Invite,
+                        Phase::Shelf => crate::kid::KidWhere::Shelf,
+                        Phase::Playing { .. } => crate::kid::KidWhere::Playing,
+                        _ => crate::kid::KidWhere::Other,
+                    };
+                    match crate::kid::allowed(at, self.state.kid_mode, action) {
+                        Some(Action::Eject) if self.single_cart() => return,
+                        Some(kept) => kept,
+                        None => return,
+                    }
                 }
             }
             false => action,
@@ -6156,6 +6306,9 @@ impl App {
             return;
         }
         if self.adjust(action) {
+            return;
+        }
+        if self.box_input(action) {
             return;
         }
         match action {
@@ -6605,6 +6758,7 @@ impl App {
             | QuickRow::BatteryDisplay
             | QuickRow::KidMode
             | QuickRow::KidShelf
+            | QuickRow::BoxView
             | QuickRow::Wallpaper
             | QuickRow::WallpaperTint
             | QuickRow::Resume
@@ -6821,6 +6975,17 @@ impl App {
             self.persist();
             return;
         }
+        if row == QuickRow::BoxView {
+            self.carousel_view = self.carousel_view.toggle();
+            self.box_scene = BoxScene::Carousel;
+            self.apply_carousel_view();
+            if let Some(root) = &self.root {
+                if let Err(e) = slot_store::write_carousel_view(root, self.carousel_view) {
+                    eprintln!("slot: carousel_view: {e}");
+                }
+            }
+            return;
+        }
         if row == QuickRow::LidOff {
             let n = LID_OFF_MIN.len();
             let at = LID_OFF_MIN
@@ -6913,6 +7078,7 @@ impl App {
             | QuickRow::ShowTitles
             | QuickRow::KidMode
             | QuickRow::KidShelf
+            | QuickRow::BoxView
             | QuickRow::DateTime
             | QuickRow::About
             | QuickRow::Screen
@@ -7315,6 +7481,8 @@ impl App {
         }
         self.lock_kid_on_close();
         self.take_eject_write(false);
+        self.tick_box_scene();
+        self.tick_open_box(dt);
         if self.name_pending && self.shelf_platform.face.is_some() {
             self.name_pending = false;
             self.shelf_named = Some(self.now());
@@ -7416,6 +7584,11 @@ impl App {
         if let Some(phase) = next {
             if matches!(self.phase, Phase::Ejecting { .. }) && self.two_panels && self.ds_seated() {
                 self.ds_landed = Some(self.clock);
+            }
+            if matches!(phase, Phase::Shelf) && matches!(self.box_scene, BoxScene::QuickLaunched) {
+                self.box_scene = BoxScene::QuickClosing {
+                    started: self.now(),
+                };
             }
             self.phase = phase;
             self.refused_from = None;
@@ -8509,16 +8682,17 @@ impl App {
                 self.draw_background(out);
                 match (self.core_picker_shown(), self.selected_stem()) {
                     (Some(picker), Some(stem)) => {
+                        let open_box = self.carousel_view == CarouselView::Boxes
+                            && matches!(self.box_scene, BoxScene::Open { .. })
+                            && self.selected_box().is_some();
                         let open = ease(picker.openness(self.now()));
                         let dim = 1.0 + (CORE_PICKER_DIM - 1.0) * open;
-                        self.shelf().draw_row(
-                            self.canvas(),
-                            Some(stem),
-                            0.0,
-                            CORE_PICKER_RECEDE * open,
-                            dim,
-                            out,
-                        );
+                        let recede = CORE_PICKER_RECEDE * open;
+                        self.shelf()
+                            .draw_row(self.canvas(), Some(stem), 0.0, recede, dim, out);
+                        if open_box {
+                            self.draw_open_box_backdrop(recede, dim, 130.0, out);
+                        }
                         draw_empty_slot(self.canvas(), self.slot_faces, out);
                     }
                     _ => {
@@ -8528,32 +8702,49 @@ impl App {
                         } else if let Some(part) = self.ds_parted() {
                             self.shelf().draw_row_parted(self.canvas(), None, part, out);
                             draw_empty_slot(self.canvas(), self.slot_faces, out);
-                        } else if !self.draw_unwrap(out) {
-                            self.shelf().draw(
+                        } else {
+                            if self.box_scene != BoxScene::Carousel && self.selected_box().is_some()
+                            {
+                                self.shelf().draw_row(
+                                    self.canvas(),
+                                    self.selected_stem(),
+                                    0.0,
+                                    0.0,
+                                    1.0,
+                                    out,
+                                );
+                                draw_empty_slot(self.canvas(), self.slot_faces, out);
+                            }
+                            let box_scene_drawn = self.draw_box_scene(out);
+                            if !box_scene_drawn && !self.draw_unwrap(out) {
+                                self.shelf().draw(
+                                    self.canvas(),
+                                    self.shelf_shake(),
+                                    self.slot_faces,
+                                    out,
+                                );
+                            }
+                        }
+                        if self.box_scene == BoxScene::Carousel {
+                            let name_alpha = match &self.edit {
+                                None | Some(crate::editing::Edit::Selecting { .. }) => {
+                                    self.slot_name_alpha()
+                                }
+                                Some(_) => 0.0,
+                            };
+                            slot_ui::draw_slot_title(
                                 self.canvas(),
-                                self.shelf_shake(),
-                                self.slot_faces,
+                                self.shelf_platform,
+                                name_alpha,
+                                out,
+                            );
+                            slot_ui::draw_slot_title(
+                                self.canvas(),
+                                self.shelf_title,
+                                self.title_alpha(),
                                 out,
                             );
                         }
-                        let name_alpha = match &self.edit {
-                            None | Some(crate::editing::Edit::Selecting { .. }) => {
-                                self.slot_name_alpha()
-                            }
-                            Some(_) => 0.0,
-                        };
-                        slot_ui::draw_slot_title(
-                            self.canvas(),
-                            self.shelf_platform,
-                            name_alpha,
-                            out,
-                        );
-                        slot_ui::draw_slot_title(
-                            self.canvas(),
-                            self.shelf_title,
-                            self.title_alpha(),
-                            out,
-                        );
                     }
                 }
                 if self.edit.is_some() && self.core_picker_shown().is_none() {
@@ -8573,6 +8764,152 @@ impl App {
                         slot_ui::draw_wifi_icon(self.canvas(), self.gauge(), self.wifi_face(), out);
                     }
                     self.draw_kid_icon(out);
+                }
+                let bar_alpha = match self.box_scene {
+                    BoxScene::Opening { started } | BoxScene::QuickOpening { started } => {
+                        (self.now().saturating_sub(started) as f32 / BOX_BAR_FADE_MS as f32)
+                            .clamp(0.0, 1.0)
+                    }
+                    BoxScene::FlippingBack { started, .. } => {
+                        (self.now().saturating_sub(started) as f32 / BOX_BAR_FADE_MS as f32)
+                            .clamp(0.0, 1.0)
+                    }
+                    BoxScene::FlippingFront { started, .. } => (1.0
+                        - self.now().saturating_sub(started) as f32 / BOX_FLIP_MS as f32)
+                        .clamp(0.0, 1.0),
+                    BoxScene::Closing { started } => (1.0
+                        - self.now().saturating_sub(started + BOX_CLOSE_MS) as f32
+                            / BOX_BAR_FADE_MS as f32)
+                        .clamp(0.0, 1.0),
+                    BoxScene::QuickClosing { started } => (1.0
+                        - self.now().saturating_sub(started + BOX_OPEN_MS) as f32
+                            / BOX_BAR_FADE_MS as f32)
+                        .clamp(0.0, 1.0),
+                    BoxScene::Open { .. }
+                    | BoxScene::Back { .. }
+                    | BoxScene::PreparingClose { .. } => 1.0,
+                    BoxScene::Carousel | BoxScene::QuickLaunched => 0.0,
+                };
+                if bar_alpha > 0.0 {
+                    if self.plugged_face.is_some() {
+                        slot_ui::draw_plugged_slot(
+                            self.canvas(),
+                            self.plugged_face,
+                            bar_alpha,
+                            out,
+                        );
+                    } else {
+                        let mut colour = slot_ui::housing();
+                        colour[3] *= bar_alpha;
+                        out.push(Draw::Rect {
+                            x: 0.0,
+                            y: self.canvas().h - MOUTH_H,
+                            w: self.canvas().w,
+                            h: MOUTH_H,
+                            colour,
+                        });
+                    }
+                    slot_ui::draw_slot_back(self.canvas(), self.slot_faces, bar_alpha, out);
+                    slot_ui::draw_slot_front(self.canvas(), self.slot_faces, bar_alpha, out);
+                    if self.core_picker_shown().is_none() {
+                        let legends = &self.open_box_legends[usize::from(self.light())];
+                        if legends.len() >= 5 {
+                            match self.box_scene {
+                                BoxScene::Opening { .. }
+                                | BoxScene::Open {
+                                    item: BoxItem::Cartridge,
+                                } => self.draw_spread_legends(
+                                    &[legends[1], legends[2]],
+                                    self.canvas().h - MOUTH_H,
+                                    bar_alpha,
+                                    out,
+                                ),
+                                BoxScene::Open { item: BoxItem::Box } => {
+                                    let action = if legends.len() >= 10 {
+                                        legends[9]
+                                    } else {
+                                        legends[3]
+                                    };
+                                    self.draw_spread_legends(
+                                        &[legends[1], action],
+                                        self.canvas().h - MOUTH_H,
+                                        bar_alpha,
+                                        out,
+                                    );
+                                }
+                                BoxScene::Open {
+                                    item: BoxItem::Manual,
+                                } => {
+                                    if let Some(reader) = &self.manual_reader {
+                                        let back = if reader.zoom > 1.001 {
+                                            legends[4]
+                                        } else if legends.len() >= 8 {
+                                            legends[6]
+                                        } else {
+                                            legends[0]
+                                        };
+                                        let page = if reader.zoom > 1.001 && legends.len() >= 9 {
+                                            legends[8]
+                                        } else if legends.len() >= 8 {
+                                            legends[7]
+                                        } else {
+                                            legends[1]
+                                        };
+                                        self.draw_spread_legends(
+                                            &[back, page],
+                                            self.canvas().h - MOUTH_H,
+                                            bar_alpha,
+                                            out,
+                                        );
+                                    } else if legends.len() >= 8 {
+                                        self.draw_spread_legends(
+                                            &[legends[1], legends[5]],
+                                            self.canvas().h - MOUTH_H,
+                                            bar_alpha,
+                                            out,
+                                        );
+                                    } else {
+                                        self.draw_spread_legends(
+                                            &[legends[1]],
+                                            self.canvas().h - MOUTH_H,
+                                            bar_alpha,
+                                            out,
+                                        );
+                                    }
+                                }
+                                BoxScene::PreparingClose { .. } | BoxScene::Closing { .. } => {
+                                    let action = if self.box_focus > BOX_FOCUS_BOX_MOVE {
+                                        legends[3]
+                                    } else {
+                                        legends[2]
+                                    };
+                                    self.draw_spread_legends(
+                                        &[legends[1], action],
+                                        self.canvas().h - MOUTH_H,
+                                        bar_alpha,
+                                        out,
+                                    );
+                                }
+                                BoxScene::Back { .. } => {
+                                    self.draw_spread_legends(
+                                        &[legends[0], legends[3]],
+                                        self.canvas().h - MOUTH_H,
+                                        bar_alpha,
+                                        out,
+                                    );
+                                }
+                                BoxScene::FlippingBack { .. } | BoxScene::FlippingFront { .. } => {
+                                    self.draw_spread_legends(
+                                        &[legends[0], legends[3]],
+                                        self.canvas().h - MOUTH_H,
+                                        bar_alpha,
+                                        out,
+                                    )
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                 }
                 if let Some(picker) = self.core_picker_shown() {
                     let lift = lift_of(picker.openness(self.now()));
@@ -8605,6 +8942,11 @@ impl App {
                     self.draw_background(out);
                     self.shelf()
                         .draw_row(self.canvas(), Some(cart), 0.0, self.seat(), 1.0, out);
+                    if self.carousel_view == CarouselView::Boxes
+                        && self.box_scene != BoxScene::Carousel
+                    {
+                        self.draw_open_box_backdrop(self.seat(), 1.0, self.canvas().h, out);
+                    }
                 }
                 self.chrome(cart, 0.0, out);
             }
@@ -8620,6 +8962,10 @@ impl App {
                 self.draw_background(out);
                 self.shelf()
                     .draw_row(self.canvas(), Some(cart), 0.0, self.seat(), 1.0, out);
+                if self.carousel_view == CarouselView::Boxes && self.box_scene != BoxScene::Carousel
+                {
+                    self.draw_open_box_backdrop(self.seat(), 1.0, self.canvas().h, out);
+                }
                 self.chrome(cart, 0.0, out);
             }
             Phase::Playing { cart } if self.screen < 1.0 => {
@@ -10800,7 +11146,24 @@ impl App {
             return;
         }
         if self.now().saturating_sub(at) >= PLAY_HOLD_MS && !self.unwrap_seated() {
-            self.insert(!self.kid_locked() || !self.state.resume_insert);
+            let clean = !self.kid_locked() || !self.state.resume_insert;
+            if self.carousel_view == CarouselView::Boxes
+                && self.box_scene == BoxScene::Carousel
+                && self.selected_box().is_some()
+            {
+                self.start_box_open(true, clean);
+            } else if matches!(
+                self.box_scene,
+                BoxScene::Open {
+                    item: BoxItem::Cartridge
+                }
+            ) && self.box_focus.abs() > 0.001
+            {
+                self.play_held = None;
+                self.box_pending = Some(BoxCartAction::Play(clean));
+            } else {
+                self.insert(clean);
+            }
         }
     }
 
@@ -11169,7 +11532,16 @@ impl App {
             .as_ref()
             .map_or([None; 2], |cart| shelf.behind(&cart.stem));
         if let Some(cart) = picked {
-            self.studio_from = crate::studio_view::shelf_rect(self.canvas(), &cart);
+            // When opening from the Open Box View the cart is centred on screen
+            // at vanilla cart size; slide the studio in from that position.
+            self.studio_from = if self.carousel_view == CarouselView::Boxes
+                && self.box_scene != BoxScene::Carousel
+            {
+                let (cw, ch) = slot_ui::cart_box(cart.platform);
+                boxview::open_box_cart_rect(self.canvas(), cw as f32, ch as f32)
+            } else {
+                crate::studio_view::shelf_rect(self.canvas(), &cart)
+            };
             self.studio_shelf_face = face;
             self.studio_shelf_under = under;
             self.studio_opened = self.now();
@@ -11698,6 +12070,11 @@ impl App {
             self.draw_background(out);
             self.shelf()
                 .draw_row(canvas, Some(&studio.cart.stem), 0.0, 0.0, 1.0, out);
+            if self.carousel_view == CarouselView::Boxes
+                && matches!(self.box_scene, BoxScene::Open { .. })
+            {
+                self.draw_open_box_backdrop(0.0, 1.0, 0.0, out);
+            }
             self.draw_studio_ground((e - 1.0) * self.canvas().h, out);
             self.draw_studio_cart(out);
             return draw_empty_slot(canvas, self.slot_faces, out);
@@ -15931,6 +16308,10 @@ impl App {
     pub fn set_legend_faces(&mut self, faces: Vec<TexId>) {
         self.legend_faces = faces;
         self.push_hint_faces();
+    }
+
+    pub fn set_open_box_legends(&mut self, legends: [Vec<(TexId, u32)>; 2]) {
+        self.open_box_legends = legends;
     }
 
     pub fn set_undo_face(&mut self, face: Option<TexId>) {

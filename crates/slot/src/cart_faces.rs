@@ -12,6 +12,7 @@ use crate::app::{App, FaceWant};
 use crate::label_cache::label_art;
 
 const WORKERS: usize = 2;
+const BOX_CART_CACHE_SIZE: usize = 5;
 
 type Key = (usize, usize);
 
@@ -65,6 +66,8 @@ pub struct CartFaces {
     building: Building,
     asked: Vec<FaceWant>,
     free: Vec<TexId>,
+    box_lru: VecDeque<(Key, Cart)>,
+    unavailable: bool,
 }
 
 impl CartFaces {
@@ -86,13 +89,28 @@ impl CartFaces {
             building: Building::default(),
             asked: Vec::new(),
             free: Vec::new(),
+            box_lru: VecDeque::new(),
+            unavailable: false,
         }
     }
 
     pub fn sync(&mut self, app: &mut App, compositor: &mut Compositor) {
-        self.free.extend(app.shed_faces());
-        while let Ok((key, face, interior)) = self.built.try_recv() {
-            self.place(app, compositor, key, face, interior);
+        for tex in app.shed_faces() {
+            compositor.update_texture(tex, 1, 1, &[0; 4]);
+            self.free.push(tex);
+        }
+        loop {
+            match self.built.try_recv() {
+                Ok((key, face, interior)) => self.place(app, compositor, key, face, interior),
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    if !self.unavailable {
+                        eprintln!("slot: cart faces: workers stopped");
+                    }
+                    self.unavailable = true;
+                    break;
+                }
+            }
         }
         let wants = app.face_wants();
         if wants != self.asked {
@@ -102,7 +120,7 @@ impl CartFaces {
         let mut waiting: Vec<Key> = self
             .asked
             .iter()
-            .filter(|w| w.on_screen)
+            .filter(|w| w.on_screen && !app.boxes_active())
             .map(|w| (w.shelf, w.index))
             .collect();
         while !waiting.is_empty() {
@@ -112,6 +130,48 @@ impl CartFaces {
             waiting.retain(|k| *k != key);
             self.place(app, compositor, key, face, interior);
         }
+        let selected = app
+            .box_prefetch_wants()
+            .first()
+            .and_then(|&key| app.face_cart(key.0, key.1).cloned().map(|cart| (key, cart)));
+        if let Some(entry) = selected.as_ref() {
+            if let Some(at) = self.box_lru.iter().position(|old| old == entry) {
+                let entry = self.box_lru.remove(at).expect("cart cache entry");
+                self.box_lru.push_back(entry);
+            }
+        }
+        while self.box_lru.len() > BOX_CART_CACHE_SIZE {
+            let (key, cart) = self.box_lru.pop_front().expect("cart cache entry");
+            if app.face_cart(key.0, key.1) == Some(&cart) {
+                for tex in app.take_prefetched_cart_faces(key.0, key.1) {
+                    compositor.update_texture(tex, 1, 1, &[0; 4]);
+                    self.free.push(tex);
+                }
+            }
+        }
+        app.set_box_cart_loading(!self.unavailable && app.box_cart_is_loading());
+    }
+
+    pub fn wait_selected(&mut self, app: &mut App, compositor: &mut Compositor) {
+        let Some(selected) = app.selected_box_key() else {
+            return;
+        };
+        while self.building.carts.contains_key(&selected) {
+            match self.built.recv() {
+                Ok((key, face, interior)) => {
+                    self.place(app, compositor, key, face, interior);
+                    self.sync(app, compositor);
+                }
+                Err(_) => {
+                    if !self.unavailable {
+                        eprintln!("slot: cart faces: workers stopped");
+                    }
+                    self.unavailable = true;
+                    break;
+                }
+            }
+        }
+        app.set_box_cart_loading(!self.unavailable && app.box_cart_is_loading());
     }
 
     fn requeue(&mut self, app: &App, wants: &[FaceWant]) {
@@ -150,6 +210,7 @@ impl CartFaces {
         interior: Option<CartFace>,
     ) {
         self.asked.retain(|w| (w.shelf, w.index) != key);
+        let cart = self.building.carts.get(&key).cloned();
         if !self.building.finish(key, app.face_cart(key.0, key.1)) {
             return;
         }
@@ -158,6 +219,12 @@ impl CartFaces {
         if let Some(interior) = interior {
             let tex = self.texture(compositor, &interior);
             self.free.extend(app.set_cart_interior(key.0, key.1, tex));
+        }
+        if app.box_faces_at(key.0, key.1).is_some() {
+            if let Some(cart) = cart {
+                self.box_lru.retain(|(old, _)| *old != key);
+                self.box_lru.push_back((key, cart));
+            }
         }
     }
 }

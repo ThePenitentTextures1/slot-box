@@ -31,7 +31,8 @@ When kid mode is enabled a teddy bear will appear in the status bar.
   choose one of your shelves or collections.
 - **Shelves** keeps the shelves you have now, and L1, R1, L2 and R2 still move between them.
 
-On the shelf, the menu, favoriting, collections, the core picker and Cart Studio are all disabled. 
+On the shelf, the menu, favoriting, collections, the core picker and Cart Studio are all disabled.
+In Box View, children can still open and inspect boxes and read manuals.
 
 In a game, a tap of menu saves and goes back to the shelf. L2 and R2 turn the brightness down and up. Rewind, fast forward, save states, screenshots and every shortcut are disabled. Volume, power and the lid work as usual.
 

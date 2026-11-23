@@ -1292,6 +1292,58 @@ fn kid_on_a_long_shelf() -> Kid {
     )
 }
 
+fn kid_with_open_box() -> Kid {
+    let d = common::tmp_root_with_carts(&["Aaa", "Emerald"]);
+    common::write_hack_header(&d, "Emerald", "POKEMON EMER", "BPEE");
+    slot_store::write_carousel_view(d.path(), slot_store::CarouselView::Boxes).unwrap();
+    let mut kid = kid_session(
+        d,
+        kid_slot(slot_store::KidMode::Shelves, None),
+        (Platform::Gba, Core::Gpsp, "Emerald"),
+        Far::Waits,
+    );
+    let app = kid.s.app_mut();
+    for want in app.box_face_wants() {
+        app.set_box_faces(
+            want.shelf,
+            want.index,
+            Some(slot_ui::BoxFaceTextures {
+                front: slot_ui::TexId::from_raw(1000),
+                side: slot_ui::TexId::from_raw(1001),
+                back: slot_ui::TexId::from_raw(1002),
+                flap: None,
+                front_size: (100, 100),
+                side_size: (20, 100),
+                back_size: (100, 100),
+                japanese: false,
+                pivot: [120.0, 50.0],
+                front_center: [170.0, 50.0],
+            }),
+        );
+    }
+    app.apply(Action::Insert);
+    assert_eq!(app.manual_cover_want().unwrap().stem, "Aaa");
+    kid
+}
+
+#[test]
+fn declining_an_invite_keeps_the_open_box() {
+    let mut kid = kid_with_open_box();
+    kid.card_for(emerald_from(Core::Gpsp));
+    kid.press(Btn::B);
+    assert!(kid.s.app().invite_card().is_none());
+    assert_eq!(kid.s.app().manual_cover_want().unwrap().stem, "Aaa");
+}
+
+#[test]
+fn accepting_an_invite_closes_the_previous_box_before_launch() {
+    let mut kid = kid_with_open_box();
+    kid.card_for(emerald_from(Core::Gpsp));
+    kid.press(Btn::A);
+    assert!(matches!(kid.s.app().phase(), Phase::Inserting { cart, .. } if cart == "Emerald"));
+    assert!(kid.s.app().manual_cover_want().is_none());
+}
+
 fn stem_of(kid: &Kid) -> String {
     kid.s.app().selected_stem().expect("a cart").to_string()
 }

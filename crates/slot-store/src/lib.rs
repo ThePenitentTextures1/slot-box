@@ -7,6 +7,8 @@ macro_rules! eprintln {
 
 mod atomic;
 mod bindings;
+pub mod boxes;
+pub mod carousel_view;
 pub mod cart_shell;
 mod collections;
 mod config;
@@ -17,6 +19,7 @@ mod gba;
 mod guides;
 pub mod header_index;
 pub mod ini;
+mod manuals;
 #[cfg(feature = "nds")]
 mod nds_header;
 pub mod overlay;
@@ -34,6 +37,11 @@ pub use bindings::{
     Binding, CarouselAction, CarouselKeys, Controls, Device, GameButton, Modifier, Shortcut,
     ShortcutKeys, COLLECTION_ACTIONS, SHELF_ACTIONS,
 };
+pub use boxes::{
+    box_art, box_art_file, box_art_path, box_dir, box_root, BoxArt, BoxArtImage, BoxArtSource,
+    TexturePanel,
+};
+pub use carousel_view::{read as read_carousel_view, write as write_carousel_view, CarouselView};
 pub use cart_shell::{Outline, ShellChoice, ShellFinish, CART_SHELL_FILE, LABELS_SHELL_FILE};
 pub use collections::{
     delete_collection, name_ok, read_collections, write_collection, write_order, Collection,
@@ -49,6 +57,7 @@ pub use guides::{
     decode_guide, find_guide, read_guide, read_guide_spot, write_guide_spot, GuideSpot, GUIDES_DIR,
     GUIDE_SPOTS_FILE,
 };
+pub use manuals::{manual_pages, ManualPage, MANUALS_DIR};
 #[cfg(feature = "nds")]
 pub use nds_header::{read_banner, NdsBanner};
 pub use overlay::{overlay_entries, OverlayEntry, OverlayPart};

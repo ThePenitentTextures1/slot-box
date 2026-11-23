@@ -51,6 +51,10 @@ pub struct Frontend {
     title_tex: Option<TexId>,
     faces: FaceBuilder,
     cart_faces: CartFaces,
+    box_faces: crate::box_faces::BoxFaces,
+    manual_covers: crate::manual_covers::ManualCovers,
+    box_view_primed: bool,
+    manual_resize: Option<(slot_store::Cart, crate::manual_resize::Worker)>,
     rebuild: Option<Rebuild>,
     stale_check: Option<std::sync::mpsc::Receiver<Vec<slot_store::Cart>>>,
     ui_faces: Option<std::sync::mpsc::Receiver<UiFaces>>,
@@ -589,6 +593,9 @@ impl Frontend {
     pub fn boot_with(platform: Box<dyn Platform>, sink: Box<dyn crate::audio::AudioSink>) -> Self {
         let now = Instant::now();
         let cart_faces = CartFaces::spawn(platform.root().to_path_buf());
+        let box_faces = crate::box_faces::BoxFaces::spawn(platform.root().to_path_buf());
+        let manual_covers =
+            crate::manual_covers::ManualCovers::spawn(platform.root().to_path_buf());
         save_headers_when_changed(platform.root().to_path_buf());
         let lid_root = platform.root().to_path_buf();
         let mut session = Session::boot_with(platform.root().to_path_buf(), sink);
@@ -634,6 +641,10 @@ impl Frontend {
             title_tex: None,
             faces: FaceBuilder::spawn(lid_root),
             cart_faces,
+            box_faces,
+            manual_covers,
+            box_view_primed: false,
+            manual_resize: None,
             rebuild: None,
             stale_check,
             ui_faces: None,
@@ -702,8 +713,10 @@ impl Frontend {
     pub fn upload_boot_faces(&mut self, compositor: &mut Compositor) {
         Self::upload_paper(compositor);
         crate::boot_time::mark("paper");
-        if self.rebuild.is_none() {
+        if self.rebuild.is_none() && !self.prime_box_view(compositor) {
+            self.box_faces.sync(self.session.app_mut(), compositor);
             self.cart_faces.sync(self.session.app_mut(), compositor);
+            self.manual_covers.sync(self.session.app_mut(), compositor);
         }
         crate::boot_time::mark("cart faces");
         let (tx, rx) = std::sync::mpsc::channel();
@@ -729,6 +742,32 @@ impl Frontend {
         self.session.app_mut().set_alert_face(alert);
         let legend = legend_faces(compositor, &LEGEND);
         self.session.app_mut().set_legend_faces(legend);
+        let open_box_legends = [false, true].map(|light| {
+            [
+                (slot_ui::StudioGlyph::B, "Close", true),
+                (slot_ui::StudioGlyph::UpDown, "Select", true),
+                (slot_ui::StudioGlyph::A, "Play", false),
+                (slot_ui::StudioGlyph::A, "Flip", false),
+                (slot_ui::StudioGlyph::B, "Reset zoom", true),
+                (slot_ui::StudioGlyph::A, "Read", false),
+                (slot_ui::StudioGlyph::B, "Put down", true),
+                (slot_ui::StudioGlyph::LeftRight, "Pages", false),
+                (slot_ui::StudioGlyph::LeftRight, "Pan", false),
+                (slot_ui::StudioGlyph::A, "Inspect", false),
+            ]
+            .into_iter()
+            .map(|(glyph, word, left)| {
+                let face = slot_ui::studio_legend(glyph, word, footer_ink(light), left);
+                (
+                    compositor.create_texture(face.w, face.h, &face.rgba),
+                    face.w,
+                )
+            })
+            .collect()
+        });
+        self.session
+            .app_mut()
+            .set_open_box_legends(open_box_legends);
         let shot_hints = slot_ui::SHOT_HINTS
             .iter()
             .map(|&(key, label)| {
@@ -1249,6 +1288,27 @@ impl Frontend {
         }
     }
 
+    fn prime_box_view(&mut self, compositor: &mut Compositor) -> bool {
+        if !self.session.app().box_view_enabled() {
+            self.box_view_primed = false;
+            return false;
+        }
+        if self.box_view_primed || !self.session.app().boxes_active() {
+            return false;
+        }
+        let app = self.session.app_mut();
+        self.box_faces.sync_startup(app, compositor);
+        self.box_faces.wait_selected_face(app, compositor);
+        self.box_faces.sync_startup(app, compositor);
+        self.cart_faces.sync(app, compositor);
+        self.manual_covers.sync(app, compositor);
+        self.box_faces.wait_selected_details(app, compositor);
+        self.cart_faces.wait_selected(app, compositor);
+        self.manual_covers.wait_selected(app, compositor);
+        self.box_view_primed = true;
+        true
+    }
+
     fn prepare(&mut self, compositor: &mut Compositor) -> bool {
         compositor.set_blue_light(self.session.app().blue_light());
         compositor.set_dim(self.session.app().dim());
@@ -1283,7 +1343,24 @@ impl Frontend {
             compositor.upload_game(&frame);
             crate::latency::taken();
         }
-        self.cart_faces.sync(self.session.app_mut(), compositor);
+        let primed = self.prime_box_view(compositor);
+        if !primed {
+            self.box_faces.sync(self.session.app_mut(), compositor);
+            self.cart_faces.sync(self.session.app_mut(), compositor);
+        }
+        if let Some(cart) = self.session.app().manual_cover_want() {
+            if self.manual_resize.as_ref().map(|(old, _)| old) != Some(&cart) {
+                if let Some(root) = self.session.app().root() {
+                    self.manual_resize = Some((
+                        cart.clone(),
+                        crate::manual_resize::Worker::start(root.to_path_buf(), vec![cart]),
+                    ));
+                }
+            }
+        }
+        if !primed {
+            self.manual_covers.sync(self.session.app_mut(), compositor);
+        }
         sync_clock(self.session.app_mut(), compositor, &mut self.clocks);
         sync_box_art(self.session.app_mut(), compositor, &mut self.box_art);
         sync_binding_faces(self.session.app_mut(), compositor);

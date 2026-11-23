@@ -70,10 +70,10 @@ For other chords, the first button goes to the game straight away and the second
 :   Switch between Game Boy Advance and Game Boy Advance Video
 
 Tap <kbd>A</kbd>
-:   Resume the last save state
+:   Insert the selected cartridge, using Resume on Insert; open a selected box in Box View
 
 Hold <kbd>A</kbd>
-:   Start the game fresh
+:   Start fresh without auto-loading a save state, including for a selected box
 
 <kbd>Y</kbd>
 :   Favorite / Unfavorite selected game
@@ -85,7 +85,7 @@ Hold <kbd>A</kbd>
 :   Open the settings menu
 
 <kbd>START</kbd>
-:   Choose which emulator runs the cart (GBA only)
+:   Choose which emulator runs the selected cartridge; play a selected box using Resume on Insert
 
 Hold <kbd>Y</kbd>
 :   Add the game to a collection

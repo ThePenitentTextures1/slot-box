@@ -53,6 +53,14 @@ pub enum Draw {
         uv: [f32; 4],
         alpha: f32,
     },
+    /// Textured quad with positive clip-space W values for perspective-correct UVs.
+    PerspectiveQuad {
+        corners: [[f32; 2]; 4],
+        depth: [f32; 4],
+        tex: TexId,
+        uv: [f32; 4],
+        alpha: f32,
+    },
     Paper {
         tex: TexId,
         pivot: [f32; 2],
@@ -161,6 +169,7 @@ pub struct Sprites {
     u_quad: gl::types::GLint,
     u_c01: gl::types::GLint,
     u_c23: gl::types::GLint,
+    u_depth: gl::types::GLint,
     target: crate::Canvas,
     paper: Option<PaperPass>,
 }
@@ -176,7 +185,7 @@ impl Sprites {
             gl::RGBA,
             Some(&[255u8; 4]),
         );
-        let (u_rect, u_colour, u_turn, u_target, u_src, u_quad, u_c01, u_c23);
+        let (u_rect, u_colour, u_turn, u_target, u_src, u_quad, u_c01, u_c23, u_depth);
         unsafe {
             gl::UseProgram(prog);
             gl::Uniform1i(crate::gl::uniform_location(prog, "u_tex"), 0);
@@ -189,6 +198,7 @@ impl Sprites {
             u_quad = crate::gl::uniform_location(prog, "u_quad");
             u_c01 = crate::gl::uniform_location(prog, "u_c01");
             u_c23 = crate::gl::uniform_location(prog, "u_c23");
+            u_depth = crate::gl::uniform_location(prog, "u_depth");
         }
         Ok(Sprites {
             prog,
@@ -202,6 +212,7 @@ impl Sprites {
             u_quad,
             u_c01,
             u_c23,
+            u_depth,
             target: crate::Canvas::FRAMED,
             paper: None,
         })
@@ -274,6 +285,7 @@ impl Sprites {
         for item in items {
             let whole = [0.0, 0.0, 1.0, 1.0];
             let mut corners = None;
+            let mut depth = [1.0; 4];
             let (x, y, w, h, tex, colour, turn, uv) = match *item {
                 Draw::Rect { x, y, w, h, colour } => (x, y, w, h, self.white, colour, 0.0, whole),
                 Draw::Tex {
@@ -323,6 +335,20 @@ impl Sprites {
                     }
                     None => continue,
                 },
+                Draw::PerspectiveQuad {
+                    corners: c,
+                    depth: d,
+                    tex,
+                    uv,
+                    alpha,
+                } => match self.textures.get(tex.0) {
+                    Some(t) => {
+                        corners = Some(c);
+                        depth = d;
+                        (0.0, 0.0, 1.0, 1.0, *t, [1.0, 1.0, 1.0, alpha], 0.0, uv)
+                    }
+                    None => continue,
+                },
                 Draw::Paper { .. } => {
                     self.draw_paper(item, quad);
                     continue;
@@ -340,6 +366,7 @@ impl Sprites {
                 gl::Uniform2f(self.u_turn, cos, sin);
                 gl::Uniform4f(self.u_src, uv[0], uv[1], uv[2], uv[3]);
                 gl::Uniform4f(self.u_colour, colour[0], colour[1], colour[2], colour[3]);
+                gl::Uniform4f(self.u_depth, depth[0], depth[1], depth[2], depth[3]);
                 match corners {
                     Some(c) => {
                         gl::Uniform1f(self.u_quad, 1.0);
