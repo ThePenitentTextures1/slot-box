@@ -38,6 +38,11 @@ pub fn link_kind(code: &str, title: &str, clean: bool) -> LinkKind {
     }
 }
 
+pub fn boxed_pokemon_adapter(code: &str, title: &str, clean: bool) -> bool {
+    (code.starts_with("BPR") || code.starts_with("BPG"))
+        && link_kind(code, title, clean) == LinkKind::Wireless
+}
+
 pub fn serial_option(chosen: LinkKind, auto: LinkKind, code: &str, title: &str) -> &'static str {
     if chosen == auto {
         return "auto";

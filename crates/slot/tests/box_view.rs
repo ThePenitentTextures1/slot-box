@@ -526,6 +526,200 @@ fn open(app: &mut App) {
     app.update(1.78);
 }
 
+fn adapter_sprites(app: &mut App) -> TexId {
+    use slot::link_screen::{LinkSprites, Sprite};
+    let adapter = Sprite {
+        tex: TexId::from_raw(9900),
+        w: 290,
+        h: 180,
+    };
+    let other = Sprite {
+        tex: TexId::from_raw(9901),
+        w: 10,
+        h: 10,
+    };
+    app.set_link_sprites(LinkSprites {
+        adapter,
+        port: other,
+        plug_host: other,
+        plug_join: other,
+        arcs_right: [other; 3],
+        arcs_left: [other; 3],
+        clicks: other,
+        arrow_left: other,
+        arrow_right: other,
+    });
+    app.set_box_adapter_faces(vec![
+        (TexId::from_raw(9910), 300, 56),
+        (TexId::from_raw(9911), 300, 84),
+        (TexId::from_raw(9912), 300, 84),
+        (TexId::from_raw(9913), 300, 56),
+    ]);
+    adapter.tex
+}
+
+fn select_adapter(app: &mut App) {
+    app.apply(Action::GbaDown(Btn::Up));
+    app.update(0.3);
+    app.apply(Action::GbaDown(Btn::Up));
+    app.apply(Action::GbaDown(Btn::A));
+    app.update(0.3);
+}
+
+#[test]
+fn boxed_adapter_requires_a_manual_and_uses_physical_scale() {
+    for (title, code, present) in [
+        ("POKEMON FIRE", "BPRE", true),
+        ("POKEMON LEAF", "BPGE", true),
+        ("POKEMON EMER", "BPEE", false),
+        ("PKMN HACK", "BPRE", false),
+    ] {
+        let root = common::tmp_root_with_carts(&["Game", "Zzz"]);
+        common::write_retail_header(&root, "Game", title, code);
+        let mut app = setup(root.path());
+        let adapter = adapter_sprites(&mut app);
+        open(&mut app);
+        assert!(face(&app, adapter).is_none());
+        let cart = selected_cart(&app);
+        app.set_manual_cover(Some((cart.clone(), TexId::from_raw(9000))));
+        let shown = face(&app, adapter);
+        assert_eq!(shown.is_some(), present, "{code} {title}");
+        if let Some(rect) = shown {
+            let (w, h) = slot_ui::loose_cart_dimensions(&cart);
+            assert!(
+                (rect[1][0] - rect[0][0] - w * slot_ui::BOX_VIEW_SCALE * 62.0 / 60.0).abs() < 0.01
+            );
+            assert!(
+                (rect[3][1] - rect[0][1] - h * slot_ui::BOX_VIEW_SCALE * 37.7 / 35.0).abs() < 0.01
+            );
+            select_adapter(&mut app);
+            let rect = face(&app, adapter).unwrap();
+            assert!((rect[1][0] - rect[0][0] - 290.0).abs() < 0.01);
+            assert!((rect[3][1] - rect[0][1] - 180.0).abs() < 0.01);
+            assert!(face(&app, TexId::from_raw(9910)).is_some());
+            app.apply(Action::GbaDown(Btn::A));
+            assert!(
+                slot_store::ini::value(root.path(), "Config/auto_link_menu.txt", "Game").is_none()
+            );
+        }
+    }
+}
+
+#[test]
+fn adapter_preference_persists_and_opens_link_menu_before_play() {
+    use slot::app::{GameMenu, LinkRow};
+    use slot_store::{write_selected_core, Core, Platform};
+    let root = common::tmp_root_with_carts(&["Game", "Zzz"]);
+    common::write_retail_header(&root, "Game", "POKEMON FIRE", "BPRE");
+    write_selected_core(root.path(), Platform::Gba, "Game", Core::Gpsp).unwrap();
+    let mut app = setup(root.path());
+    adapter_sprites(&mut app);
+    app.set_manual_cover(Some((selected_cart(&app), TexId::from_raw(9000))));
+    open(&mut app);
+    select_adapter(&mut app);
+    assert!(face(&app, TexId::from_raw(9912)).is_some());
+    app.apply(Action::GbaDown(Btn::Left));
+    app.apply(Action::GbaDown(Btn::A));
+    assert_eq!(
+        slot_store::ini::value(root.path(), "Config/auto_link_menu.txt", "Game").as_deref(),
+        Some("yes")
+    );
+    drop(app);
+    let mut app = setup(root.path());
+    adapter_sprites(&mut app);
+    app.set_manual_cover(Some((selected_cart(&app), TexId::from_raw(9000))));
+    open(&mut app);
+    select_adapter(&mut app);
+    assert!(face(&app, TexId::from_raw(9911)).is_some());
+    app.apply(Action::GbaDown(Btn::Right));
+    app.apply(Action::GbaDown(Btn::A));
+    assert_eq!(
+        slot_store::ini::value(root.path(), "Config/auto_link_menu.txt", "Game").as_deref(),
+        Some("no")
+    );
+    app.apply(Action::GbaDown(Btn::Left));
+    app.apply(Action::GbaDown(Btn::A));
+    app.apply(Action::GbaDown(Btn::B));
+    app.update(0.3);
+    app.apply(Action::GbaDown(Btn::Down));
+    app.apply(Action::GbaDown(Btn::Down));
+    app.apply(Action::Insert);
+    app.update(0.5);
+    assert!(matches!(app.phase(), Phase::Inserting { .. }));
+    assert!(app.auto_link_on_insert());
+    app.set_core(Core::Gpsp);
+    app.on_core_ready();
+    app.update(1.0);
+    assert!(matches!(app.phase(), Phase::Inserting { .. }));
+    app.set_game_ready(true);
+    app.update(0.1);
+    assert!(matches!(app.phase(), Phase::Playing { .. }));
+    assert_eq!(app.game_menu(), Some(GameMenu::Pick(LinkRow::Host)));
+    assert_eq!(app.link_mode("Game").0, slot::link_kind::LinkKind::Wireless);
+    app.apply(Action::GbaDown(Btn::Select));
+    assert_eq!(app.link_mode("Game").0, slot::link_kind::LinkKind::Cable);
+    app.apply(Action::GbaDown(Btn::B));
+    assert!(!app.game_menu_open());
+}
+
+#[test]
+fn automatic_menu_respects_disabled_choice_core_and_missing_wifi() {
+    use slot_store::{write_selected_core, Core, Platform};
+    let root = common::tmp_root_with_carts(&["Game", "Zzz"]);
+    common::write_retail_header(&root, "Game", "POKEMON LEAF", "BPGE");
+    let write = |value| {
+        slot_store::ini::write(root.path(), "Config/auto_link_menu.txt", "Game", value).unwrap()
+    };
+    write_selected_core(root.path(), Platform::Gba, "Game", Core::Gpsp).unwrap();
+    write("no");
+    let mut disabled = common::boot(root.path());
+    disabled.apply(Action::Insert);
+    assert!(!disabled.auto_link_on_insert());
+    drop(disabled);
+    write("yes");
+    write_selected_core(root.path(), Platform::Gba, "Game", Core::Mgba).unwrap();
+    let mut mgba = common::boot(root.path());
+    mgba.apply(Action::Insert);
+    assert!(!mgba.auto_link_on_insert());
+    drop(mgba);
+    write_selected_core(root.path(), Platform::Gba, "Game", Core::Gpsp).unwrap();
+    let mut no_wifi = common::boot(root.path());
+    no_wifi.set_wifi_probe(root.path().join("no-wifi-device"));
+    no_wifi.apply(Action::Insert);
+    assert!(no_wifi.auto_link_on_insert());
+    no_wifi.set_core(Core::Gpsp);
+    no_wifi.on_core_ready();
+    no_wifi.set_game_ready(true);
+    no_wifi.update(2.0);
+    assert!(matches!(no_wifi.phase(), Phase::Playing { .. }));
+    assert!(!no_wifi.game_menu_open());
+    assert_eq!(no_wifi.toast(), Some(slot_ui::Toast::NoWifi));
+}
+
+#[test]
+fn automatic_menu_waits_for_a_preview_even_after_a_slow_core_load() {
+    let root = common::tmp_root_with_carts(&["Game", "Zzz"]);
+    common::write_retail_header(&root, "Game", "POKEMON FIRE", "BPRE");
+    slot_store::write_selected_core(
+        root.path(),
+        slot_store::Platform::Gba,
+        "Game",
+        slot_store::Core::Gpsp,
+    )
+    .unwrap();
+    slot_store::ini::write(root.path(), "Config/auto_link_menu.txt", "Game", "yes").unwrap();
+    let mut app = common::boot(root.path());
+    app.apply(Action::Insert);
+    app.update(10.0);
+    app.set_core(slot_store::Core::Gpsp);
+    app.on_core_ready();
+    app.update(0.1);
+    assert!(matches!(app.phase(), Phase::Inserting { .. }));
+    app.set_game_ready(true);
+    app.update(0.1);
+    assert!(app.game_menu_open());
+}
+
 fn frame(app: &App) -> Vec<Draw> {
     let mut draws = Vec::new();
     app.draw(&mut draws);

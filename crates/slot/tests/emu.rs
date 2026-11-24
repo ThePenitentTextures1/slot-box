@@ -68,6 +68,27 @@ fn frame_count(emu: &EmuHandle) -> u64 {
 }
 
 #[test]
+fn paused_preview_publishes_one_frame_without_advancing_the_resume_state() {
+    let mut sink = StubSink::new();
+    sink.open(32_768).unwrap();
+    let emu = EmuHandle::spawn(
+        Box::new(MockCore::new()),
+        PathBuf::from("mock"),
+        sink.ring(),
+        None,
+        Some(40u64.to_le_bytes().to_vec()),
+    );
+    assert!(wait_for(|| emu.state() == CoreState::Ready));
+    emu.preview();
+    assert!(wait_for(|| emu.has_published()));
+    assert_eq!(frame_count(&emu), 40);
+    let mut expected = MockCore::new();
+    expected.unserialize(&40u64.to_le_bytes()).unwrap();
+    expected.run_frame(ButtonMask(0));
+    assert_eq!(&emu.latest_frame().unwrap()[..], expected.video_xrgb8888());
+}
+
+#[test]
 fn the_worker_runs_until_it_is_paused_and_resumes_where_it_stopped() {
     let emu = spawn();
     let early = frame_count(&emu);

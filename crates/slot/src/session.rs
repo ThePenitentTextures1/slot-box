@@ -682,6 +682,9 @@ impl Session {
         emu.set_volume(self.app.output_volume());
         emu.set_driven(self.driven);
         emu.set_fixed_present(self.fixed_present);
+        if self.app.auto_link_on_insert() {
+            emu.preview();
+        }
         self.app.set_snapshot(Box::new(emu.snapshot()));
         self.emu = Some(emu);
         self.launches += 1;

@@ -70,6 +70,14 @@ directly on the carousel.
 While Kid Mode is locked, boxes and manuals can still be inspected, but
 Cartridge Studio, the emulator picker and settings remain locked.
 
+FireRed and LeafGreen boxes with manuals may also contain a Wireless Adapter.
+Press <kbd>Up</kbd> from the manual to select it, then <kbd>A</kbd> to pick it
+up. With gpSP selected, choose whether Host/Join should open automatically when
+that cartridge is inserted; use <kbd>Left</kbd>/<kbd>Right</kbd>, then
+<kbd>A</kbd> to save. <kbd>B</kbd> puts the adapter down. The choice is saved
+per game. The automatic menu opens before gameplay resumes, and can be
+cancelled normally. Some ROM hacks may not be recognized or support wireless.
+
 With the manual selected, press <kbd>A</kbd> to pick it up. Hold
 <kbd>Left</kbd> or <kbd>Right</kbd> to pan across a spread. Double-tap a
 direction, or tap it at the outer edge, to turn to the next or previous spread.

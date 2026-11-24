@@ -731,6 +731,17 @@ pub struct App {
     manual_page_textures: Vec<(usize, TexId)>,
     manual_page_sizes: Vec<(usize, u32, u32)>,
     manual_reader: Option<boxview::ManualReader>,
+    box_adapter_present: bool,
+    box_adapter_open: bool,
+    box_adapter_closing: bool,
+    box_adapter_pickup: f32,
+    box_adapter_focus: f32,
+    box_adapter_choice: bool,
+    box_adapter_core_gpsp: bool,
+    box_adapter_faces: Vec<(TexId, u32, u32)>,
+    auto_link_on_insert: bool,
+    auto_link_ready_since: Option<Millis>,
+    auto_link_menu: bool,
     box_focus: f32,
     box_zoom: f32,
     box_pan: [f32; 2],
@@ -1291,6 +1302,17 @@ impl App {
             manual_page_textures: Vec::new(),
             manual_page_sizes: Vec::new(),
             manual_reader: None,
+            box_adapter_present: false,
+            box_adapter_open: false,
+            box_adapter_closing: false,
+            box_adapter_pickup: 0.0,
+            box_adapter_focus: 0.0,
+            box_adapter_choice: false,
+            box_adapter_core_gpsp: false,
+            box_adapter_faces: Vec::new(),
+            auto_link_on_insert: false,
+            auto_link_ready_since: None,
+            auto_link_menu: false,
             box_focus: 0.0,
             box_zoom: 1.0,
             box_pan: [0.0, 0.0],
@@ -1511,6 +1533,7 @@ impl App {
                 self.shelf_at = at;
                 self.shelf_mut().select(i);
                 self.insert(!self.state.resume_power_on);
+                self.auto_link_on_insert = false;
                 // Bugfix: A boot-resumed game has no remembered box launch context.
                 if self.carousel_view == CarouselView::Boxes
                     && !self.single_cart()
@@ -7529,6 +7552,10 @@ impl App {
             }
         }
         let ready = self.core_faces_ready();
+        let wait_for_auto_frame = self.auto_link_on_insert && !self.game_ready();
+        let auto_frame_timed_out = self
+            .auto_link_ready_since
+            .is_some_and(|since| now.saturating_sub(since) >= 2_000);
         if let Some(picker) = &mut self.core_picker {
             if picker.waiting() && (ready || picker.waited(now) >= FACES_WAIT_MS) {
                 picker.start(now);
@@ -7576,9 +7603,10 @@ impl App {
                 };
                 let at = SEATED_AT - clicks.0.lead() * fly.0;
                 touched = !*resumed && was < at && *t >= at;
-                (*t >= INSERT_S && *core_ready).then(|| Phase::Playing {
-                    cart: std::mem::take(cart),
-                })
+                (*t >= INSERT_S && *core_ready && (!wait_for_auto_frame || auto_frame_timed_out))
+                    .then(|| Phase::Playing {
+                        cart: std::mem::take(cart),
+                    })
             }
             Phase::Ejecting { t, .. } => {
                 if self.screen <= 0.0 {
@@ -7631,8 +7659,18 @@ impl App {
             self.record_cart(seated);
             if let Some(heard) = self.join_later.take() {
                 if self.seated().is_some() {
+                    self.auto_link_on_insert = false;
                     self.join_host(heard);
                 }
+            }
+            if matches!(self.phase, Phase::Playing { .. })
+                && std::mem::take(&mut self.auto_link_on_insert)
+            {
+                if wait_for_auto_frame {
+                    eprintln!("slot: link: first frame was not available before opening the menu");
+                }
+                self.open_game_menu();
+                self.auto_link_menu = self.game_menu.is_some();
             }
         }
         self.step_screen(dt);
@@ -8131,15 +8169,27 @@ impl App {
     }
 
     pub fn on_core_ready(&mut self) {
+        let now = self.now();
         let Phase::Inserting {
             cart, core_ready, ..
         } = &mut self.phase
         else {
             return;
         };
+        if !*core_ready && self.auto_link_on_insert {
+            self.auto_link_ready_since = Some(now);
+        }
         *core_ready = true;
         let cart = cart.clone();
         self.retire_refused_resume(&cart);
+    }
+
+    pub fn auto_link_on_insert(&self) -> bool {
+        self.auto_link_on_insert
+    }
+
+    pub fn auto_link_menu(&self) -> bool {
+        self.auto_link_menu && self.game_menu.is_some()
     }
 
     fn retire_refused_resume(&mut self, stem: &str) {
@@ -8894,6 +8944,30 @@ impl App {
                                     } else {
                                         self.draw_spread_legends(
                                             &[legends[1]],
+                                            self.canvas().h - MOUTH_H,
+                                            bar_alpha,
+                                            out,
+                                        );
+                                    }
+                                }
+                                BoxScene::Open {
+                                    item: BoxItem::Adapter,
+                                } => {
+                                    if self.box_adapter_open && legends.len() >= 7 {
+                                        self.draw_spread_legends(
+                                            &[legends[6]],
+                                            self.canvas().h - MOUTH_H,
+                                            bar_alpha,
+                                            out,
+                                        );
+                                    } else if legends.len() >= 6 {
+                                        let action = if legends.len() >= 11 {
+                                            legends[10]
+                                        } else {
+                                            legends[5]
+                                        };
+                                        self.draw_spread_legends(
+                                            &[legends[1], action],
                                             self.canvas().h - MOUTH_H,
                                             bar_alpha,
                                             out,
@@ -11136,6 +11210,12 @@ impl App {
         }) else {
             return;
         };
+        self.auto_link_on_insert = self
+            .shelf()
+            .carts
+            .get(at)
+            .is_some_and(|cart| self.wants_auto_link(cart));
+        self.auto_link_ready_since = None;
         self.seated_platform = Some(platform);
         eprintln!(
             "slot: launch: insert {cart} at {:.1} ms",
@@ -11448,6 +11528,7 @@ impl App {
     }
 
     fn open_game_menu(&mut self) {
+        self.auto_link_menu = false;
         if self.game_menu.is_some() {
             return;
         }
@@ -15648,6 +15729,7 @@ impl App {
 
     fn close_game_menu(&mut self) {
         self.game_menu = None;
+        self.auto_link_menu = false;
         self.ble_off();
         if self.prejoin.as_ref().is_some_and(|p| p.go_since.is_some()) {
             self.drop_prejoin();

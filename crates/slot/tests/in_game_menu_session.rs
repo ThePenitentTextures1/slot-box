@@ -80,6 +80,33 @@ fn open_menu(s: &mut Session, now: &mut Millis) {
 }
 
 #[test]
+fn automatic_link_menu_keeps_the_inserted_game_paused_until_cancelled() {
+    let d = common::tmp_root_with_carts(&["Fire", "Zzz"]);
+    common::write_retail_header(&d, "Fire", "POKEMON FIRE", "BPRE");
+    common::clocked(d.path());
+    slot_store::write_selected_core(d.path(), slot_store::Platform::Gba, "Fire", Core::Gpsp)
+        .unwrap();
+    slot_store::ini::write(d.path(), "Config/auto_link_menu.txt", "Fire", "yes").unwrap();
+    let mut s = Session::boot(d.path().to_path_buf());
+    s.app_mut().apply(slot_input::Action::Insert);
+    let mut now = 0;
+    let deadline = Instant::now() + BAIL;
+    while !s.app().game_menu_open() {
+        assert!(
+            Instant::now() < deadline,
+            "automatic link menu never opened"
+        );
+        step(&mut s, &mut now, &[]);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(s.emu().unwrap().has_published());
+    assert!(runs_at(&mut s, &mut now, Speed::Paused));
+    tap(&mut s, &mut now, Btn::B);
+    assert!(!s.app().game_menu_open());
+    assert!(runs_at(&mut s, &mut now, Speed::Normal));
+}
+
+#[test]
 fn the_in_game_menu_pauses_the_game_and_resume_runs_it_again() {
     let (mut s, _d, mut now) = session_playing();
     assert!(

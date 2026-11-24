@@ -1,5 +1,21 @@
 use super::*;
 
+const AUTO_LINK_FILE: &str = "Config/auto_link_menu.txt";
+
+fn adapter_game(cart: &Cart) -> bool {
+    if cart.platform != Platform::Gba {
+        return false;
+    }
+    let Some((title, code)) = slot_store::header_title_code(&cart.rom) else {
+        return false;
+    };
+    crate::link_kind::boxed_pokemon_adapter(&code, &title, slot_store::header_clean(&cart.rom))
+}
+
+fn auto_link_enabled(root: &std::path::Path, stem: &str) -> bool {
+    slot_store::ini::value(root, AUTO_LINK_FILE, stem).as_deref() == Some("yes")
+}
+
 fn draw_flap(
     tex: Option<TexId>,
     center: [f32; 2],
@@ -327,6 +343,13 @@ impl App {
     }
 
     pub(super) fn start_box_open(&mut self, quick: bool, clean: bool) {
+        self.box_adapter_present = self
+            .selected_box()
+            .is_some_and(|(cart, _, _)| adapter_game(cart));
+        self.box_adapter_open = false;
+        self.box_adapter_closing = false;
+        self.box_adapter_pickup = 0.0;
+        self.box_adapter_focus = 0.0;
         let (center, scale, angle) = self.shelf().selected_box_pose(self.canvas());
         self.box_open_from = boxview::BoxPose {
             center,
@@ -365,7 +388,7 @@ impl App {
         };
         if !inspecting {
             let target = match item {
-                BoxItem::Manual => -1.0,
+                BoxItem::Manual | BoxItem::Adapter => -1.0,
                 BoxItem::Cartridge => 0.0,
                 BoxItem::Box => 1.0,
             };
@@ -387,6 +410,23 @@ impl App {
                     Some(BoxCartAction::Studio) => self.open_studio(),
                     None => {}
                 }
+            }
+        }
+        let delta = dt.max(0.0) / boxview::MANUAL_PICKUP_SECONDS;
+        self.box_adapter_focus = if item == BoxItem::Adapter {
+            (self.box_adapter_focus + delta).min(1.0)
+        } else {
+            (self.box_adapter_focus - delta).max(0.0)
+        };
+        if self.box_adapter_open {
+            self.box_adapter_pickup = if self.box_adapter_closing {
+                (self.box_adapter_pickup - delta).max(0.0)
+            } else {
+                (self.box_adapter_pickup + delta).min(1.0)
+            };
+            if self.box_adapter_closing && self.box_adapter_pickup <= 0.0 {
+                self.box_adapter_open = false;
+                self.box_adapter_closing = false;
             }
         }
         let blend = 1.0 - (-12.0 * dt.max(0.0)).exp();
@@ -586,6 +626,35 @@ impl App {
         }
         if self.manual_reader.is_some() {
             return self.manual_input(action);
+        }
+        if self.box_adapter_open {
+            if self.box_adapter_closing || self.box_adapter_pickup < 1.0 {
+                return true;
+            }
+            match action {
+                Action::GbaDown(Btn::B) => self.box_adapter_closing = true,
+                Action::GbaDown(Btn::Left | Btn::Right)
+                    if self.box_adapter_core_gpsp && !self.kid_locked() =>
+                {
+                    self.box_adapter_choice = !self.box_adapter_choice;
+                }
+                Action::GbaDown(Btn::A) if self.box_adapter_core_gpsp && !self.kid_locked() => {
+                    if let (Some(root), Some((cart, _, _))) = (&self.root, self.selected_box()) {
+                        let written = slot_store::ini::write(
+                            root,
+                            AUTO_LINK_FILE,
+                            &cart.stem,
+                            if self.box_adapter_choice { "yes" } else { "no" },
+                        );
+                        if let Err(e) = &written {
+                            eprintln!("slot: {AUTO_LINK_FILE}: {e}");
+                        }
+                        self.card_writes.wrote("auto_link_menu.txt", &written);
+                    }
+                }
+                _ => {}
+            }
+            return true;
         }
         if (self.box_detail_loading || self.box_cart_loading)
             && matches!(action, Action::GbaDown(Btn::B))
@@ -839,6 +908,20 @@ impl App {
                     };
                     true
                 }
+                Action::GbaDown(Btn::Up)
+                    if item == BoxItem::Manual && self.box_adapter_available() =>
+                {
+                    self.box_scene = BoxScene::Open {
+                        item: BoxItem::Adapter,
+                    };
+                    true
+                }
+                Action::GbaDown(Btn::Down) if item == BoxItem::Adapter => {
+                    self.box_scene = BoxScene::Open {
+                        item: BoxItem::Manual,
+                    };
+                    true
+                }
                 Action::GbaDown(Btn::Up) if item == BoxItem::Box => {
                     self.box_scene = BoxScene::Open {
                         item: BoxItem::Cartridge,
@@ -887,10 +970,22 @@ impl App {
                     }
                     true
                 }
+                Action::GbaDown(Btn::A) | Action::Insert if item == BoxItem::Adapter => {
+                    if self.box_adapter_available() && self.box_focus <= -0.999 {
+                        self.box_adapter_core_gpsp = self.box_adapter_gpsp();
+                        self.box_adapter_choice =
+                            self.root.as_ref().zip(self.selected_box()).is_some_and(
+                                |(root, (cart, _, _))| auto_link_enabled(root, &cart.stem),
+                            );
+                        self.box_adapter_open = true;
+                        self.box_adapter_closing = false;
+                    }
+                    true
+                }
                 Action::GbaDown(Btn::Start | Btn::Select)
                 | Action::GbaUp(Btn::A | Btn::Select)
                 | Action::SelectTap
-                    if item == BoxItem::Manual =>
+                    if matches!(item, BoxItem::Manual | BoxItem::Adapter) =>
                 {
                     true
                 }
@@ -898,6 +993,38 @@ impl App {
             },
             _ => false,
         }
+    }
+
+    fn box_adapter_available(&self) -> bool {
+        self.box_adapter_present && self.selected_manual_cover().is_some()
+    }
+
+    fn box_adapter_gpsp(&self) -> bool {
+        self.root
+            .as_ref()
+            .zip(self.selected_box())
+            .is_some_and(|(root, (cart, _, _))| {
+                slot_store::core_for_platform(root, &cart.stem, cart.platform, self.state.gb_core)
+                    == Core::Gpsp
+            })
+    }
+
+    pub(super) fn wants_auto_link(&self, cart: &Cart) -> bool {
+        !self.kid_locked()
+            && adapter_game(cart)
+            && self.root.as_ref().is_some_and(|root| {
+                auto_link_enabled(root, &cart.stem)
+                    && slot_store::core_for_platform(
+                        root,
+                        &cart.stem,
+                        cart.platform,
+                        self.state.gb_core,
+                    ) == Core::Gpsp
+            })
+    }
+
+    pub fn set_box_adapter_faces(&mut self, faces: Vec<(TexId, u32, u32)>) {
+        self.box_adapter_faces = faces;
     }
 
     pub(super) fn manual_input(&mut self, action: Action) -> bool {
@@ -1435,6 +1562,71 @@ impl App {
                 ],
                 out,
             );
+        }
+        if extraction > 0.0
+            && !matches!(
+                self.box_scene,
+                BoxScene::QuickOpening { .. }
+                    | BoxScene::QuickLaunched
+                    | BoxScene::QuickClosing { .. }
+            )
+            && self.box_adapter_available()
+        {
+            if let Some(sprites) = self.link_sprites {
+                let aw = small_w * 62.0 / 60.0;
+                let ah = small_h * 37.7 / 35.0;
+                let target = cart_center_y - cart_height / 2.0 - 12.0 - manual_h;
+                let y = box_y - manual_h / 2.0 + (target - (box_y - manual_h / 2.0)) * extraction;
+                let pickup = smooth(self.box_adapter_pickup);
+                let full_w = sprites.adapter.w as f32;
+                let full_h = sprites.adapter.h as f32;
+                let x = canvas.w / 2.0 + manual_w / 2.0
+                    - aw * 0.35
+                    - 24.0 * smooth(self.box_adapter_focus);
+                let full_x = (canvas.w - full_w) / 2.0;
+                let full_y = ((canvas.h - MOUTH_H - full_h) / 2.0 - 35.0).max(0.0);
+                if pickup > 0.0 {
+                    out.push(Draw::Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        w: canvas.w,
+                        h: canvas.h - MOUTH_H,
+                        colour: [0.0, 0.0, 0.0, 0.5 * pickup],
+                    });
+                }
+                out.push(Draw::Tex {
+                    x: x + (full_x - x) * pickup,
+                    y: y + (full_y - y) * pickup,
+                    w: aw + (full_w - aw) * pickup,
+                    h: ah + (full_h - ah) * pickup,
+                    tex: sprites.adapter.tex,
+                    alpha: 1.0,
+                });
+                if self.box_adapter_open && pickup > 0.0 {
+                    let face = if self.kid_locked() {
+                        3
+                    } else if self.box_adapter_core_gpsp {
+                        if self.box_adapter_choice {
+                            1
+                        } else {
+                            2
+                        }
+                    } else {
+                        0
+                    };
+                    if let Some(&(tex, width, height)) = self.box_adapter_faces.get(face) {
+                        let width = (width as f32).min(canvas.w - 20.0);
+                        out.push(Draw::Tex {
+                            x: (canvas.w - width) / 2.0,
+                            y: full_y + full_h + 8.0,
+                            w: width,
+                            h: height as f32,
+                            tex,
+                            alpha: pickup,
+                        });
+                    }
+                }
+            }
         }
         if !box_behind_cart {
             draw_box(out);

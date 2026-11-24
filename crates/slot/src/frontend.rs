@@ -754,6 +754,7 @@ impl Frontend {
                 (slot_ui::StudioGlyph::LeftRight, "Pages", false),
                 (slot_ui::StudioGlyph::LeftRight, "Pan", false),
                 (slot_ui::StudioGlyph::A, "Inspect", false),
+                (slot_ui::StudioGlyph::A, "Pick up", false),
             ]
             .into_iter()
             .map(|(glyph, word, left)| {
@@ -1104,6 +1105,7 @@ impl Frontend {
             .into_iter()
             .map(|f| f.map(&mut up))
             .collect();
+        let box_adapter = faces.box_adapter.into_iter().map(&mut up).collect();
         if let Some(look) = &mut self.look {
             look.legend = [link_legend.clone(), link_legend_light];
             look.applied = None;
@@ -1136,6 +1138,7 @@ impl Frontend {
         app.set_link_step_faces(steps);
         app.set_link_fail_faces(fails, fail_hints);
         app.set_link_fail_wireless_faces(fails_wireless);
+        app.set_box_adapter_faces(box_adapter);
         app.set_toast_faces(toasts);
     }
 
@@ -1202,6 +1205,11 @@ impl Frontend {
     fn grab_link_shot(&mut self, compositor: &mut Compositor) {
         let app = self.session.app();
         let open = app.game_menu_open() || app.invite_card().is_some();
+        if app.auto_link_menu() {
+            self.session.app_mut().set_link_shot(None);
+            self.link_shot_shown = false;
+            return;
+        }
         if !open {
             if self.link_shot_shown {
                 self.link_shot_shown = false;
@@ -1753,6 +1761,7 @@ struct UiFaces {
     link_steps: Vec<UndoFace>,
     link_fails: Vec<UndoFace>,
     link_fails_wireless: Vec<Option<UndoFace>>,
+    box_adapter: Vec<UndoFace>,
     link_fail_hints: Vec<Option<UndoFace>>,
     toasts: Vec<CartFace>,
     repair: Vec<UndoFace>,
@@ -1838,6 +1847,26 @@ impl UiFaces {
                     (line != f.line(LinkKind::Cable)).then(|| menu_face(line))
                 })
                 .collect(),
+            box_adapter: vec![
+                quick_description_face(&[
+                    "Set the emulator to gpSP to enable",
+                    "Wireless Adapter features.",
+                ]),
+                quick_description_face(&[
+                    "Show Host/Join when this cartridge is inserted?",
+                    "< Yes >       No",
+                    "A: Save    B: Put down",
+                ]),
+                quick_description_face(&[
+                    "Show Host/Join when this cartridge is inserted?",
+                    "Yes       < No >",
+                    "A: Save    B: Put down",
+                ]),
+                quick_description_face(&[
+                    "Wireless Adapter settings are unavailable",
+                    "while Kid Mode is locked.",
+                ]),
+            ],
             link_fail_hints: LinkFail::SHOWN
                 .iter()
                 .map(|f| f.hint().map(menu_detail_face))

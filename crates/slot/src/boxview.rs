@@ -5,6 +5,7 @@ use slot_ui::Millis;
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Item {
     Manual,
+    Adapter,
     Cartridge,
     Box,
 }

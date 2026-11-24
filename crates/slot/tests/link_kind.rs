@@ -1,4 +1,15 @@
-use slot::link_kind::{link_carried, link_kind, serial_option, LinkKind};
+use slot::link_kind::{boxed_pokemon_adapter, link_carried, link_kind, serial_option, LinkKind};
+
+#[test]
+fn boxed_adapter_requires_firered_or_leafgreen_and_wireless_default() {
+    for (code, title) in [("BPRE", "POKEMON FIRE"), ("BPGJ", "POKEMON LEAF")] {
+        assert!(boxed_pokemon_adapter(code, title, true));
+        assert!(!boxed_pokemon_adapter(code, title, false));
+        assert!(!boxed_pokemon_adapter(code, "PKMN HACK", true));
+    }
+    assert!(!boxed_pokemon_adapter("BPEE", "POKEMON EMER", true));
+    assert!(!boxed_pokemon_adapter("BPRP", "POKEMON FIRE", true));
+}
 
 #[test]
 fn the_wireless_adapter_games_are_wireless() {
