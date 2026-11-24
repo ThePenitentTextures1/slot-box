@@ -1041,11 +1041,13 @@ impl App {
     }
 
     pub fn box_prefetch_wants(&self) -> Vec<(usize, usize)> {
-        if !self.on_shelf() || self.carousel_view != CarouselView::Boxes {
+        if self.carousel_view != CarouselView::Boxes
+            || !(self.on_shelf() || matches!(self.box_scene, BoxScene::QuickLaunched))
+        {
             return Vec::new();
         }
         self.shelf()
-            .around(1)
+            .around(if self.on_shelf() { 1 } else { 0 })
             .into_iter()
             .filter(|&index| self.shelf().box_faces(index).is_some())
             .map(|index| (self.shelf_at, index))
