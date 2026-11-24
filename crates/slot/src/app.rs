@@ -1511,6 +1511,13 @@ impl App {
                 self.shelf_at = at;
                 self.shelf_mut().select(i);
                 self.insert(!self.state.resume_power_on);
+                // Bugfix: A boot-resumed game has no remembered box launch context.
+                if self.carousel_view == CarouselView::Boxes
+                    && !self.single_cart()
+                    && matches!(self.phase, Phase::Inserting { .. })
+                {
+                    self.box_scene = BoxScene::QuickLaunched;
+                }
                 if let Phase::Inserting { resumed, t, .. } = &mut self.phase {
                     *resumed = true;
                     *t = INSERT_S;
@@ -7598,8 +7605,12 @@ impl App {
                 self.ds_landed = Some(self.clock);
             }
             if matches!(phase, Phase::Shelf) && matches!(self.box_scene, BoxScene::QuickLaunched) {
-                self.box_scene = BoxScene::QuickClosing {
-                    started: self.clock.round() as Millis,
+                self.box_scene = if self.selected_box().is_some() {
+                    BoxScene::QuickClosing {
+                        started: self.clock.round() as Millis,
+                    }
+                } else {
+                    BoxScene::Carousel
                 };
             }
             self.phase = phase;
@@ -10637,7 +10648,7 @@ impl App {
             slot: self.slot_faces_for(stem),
             canvas: self.canvas(),
         };
-        if matches!(self.box_scene, BoxScene::QuickLaunched) {
+        if matches!(self.box_scene, BoxScene::QuickLaunched) && self.selected_box().is_some() {
             chrome.draw_from_slot(out);
         } else {
             chrome.draw(out);
