@@ -755,6 +755,10 @@ impl Frontend {
                 (slot_ui::StudioGlyph::LeftRight, "Pan", false),
                 (slot_ui::StudioGlyph::A, "Inspect", false),
                 (slot_ui::StudioGlyph::A, "Pick up", false),
+                (slot_ui::StudioGlyph::Shoulders, "Zoom", false),
+                (slot_ui::StudioGlyph::LeftRight, "Put down", false),
+                (slot_ui::StudioGlyph::A, "Save", false),
+                (slot_ui::StudioGlyph::UpDown, "Scan", false),
             ]
             .into_iter()
             .map(|(glyph, word, left)| {

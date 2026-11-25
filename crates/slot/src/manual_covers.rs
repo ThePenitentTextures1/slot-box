@@ -311,6 +311,9 @@ impl ManualCovers {
                 }
             }
         }
+        app.set_box_manual_loading(
+            self.wanted.is_some() && self.applied != self.wanted && !self.cover_unavailable,
+        );
         if self.cover_pending.is_none() && !self.cover_unavailable {
             let mut candidates: Vec<Cart> = app
                 .box_prefetch_wants()
@@ -450,6 +453,83 @@ mod tests {
     use slot_store::{write_carousel_view, CarouselView};
     use slot_ui::{BoxFaceTextures, Draw};
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn pending_selected_cover_holds_opening_until_missing_manual_is_resolved() {
+        let root = tempfile::tempdir().unwrap();
+        crate::root::ensure(root.path());
+        std::fs::create_dir_all(root.path().join("Games/GBA")).unwrap();
+        std::fs::write(root.path().join("Games/GBA/Game.gba"), vec![0; 256]).unwrap();
+        std::fs::write(root.path().join("Games/GBA/Other.gba"), vec![0; 256]).unwrap();
+        write_carousel_view(root.path(), CarouselView::Boxes).unwrap();
+        slot_store::write_slot_state(
+            root.path(),
+            &slot_store::SlotState {
+                clock_set: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut app = App::boot(root.path());
+        let want = app.box_face_wants()[0];
+        let cart = app.face_cart(want.shelf, want.index).unwrap().clone();
+        let tex = TexId::from_raw(1);
+        app.set_box_faces(
+            want.shelf,
+            want.index,
+            Some(BoxFaceTextures {
+                front: tex,
+                side: tex,
+                back: tex,
+                flap: None,
+                front_size: (100, 100),
+                side_size: (20, 100),
+                back_size: (100, 100),
+                japanese: false,
+                pivot: [120.0, 50.0],
+                front_center: [170.0, 50.0],
+            }),
+        );
+        let pose = |app: &App| {
+            let mut draws = Vec::new();
+            app.draw(&mut draws);
+            draws
+                .into_iter()
+                .find_map(|draw| match draw {
+                    Draw::PerspectiveQuad {
+                        tex: t, corners, ..
+                    } if t == tex => Some(corners),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        app.apply(Action::GbaDown(Btn::A));
+        app.apply(Action::GbaUp(Btn::A));
+        let mut covers = ManualCovers::spawn(root.path().to_path_buf());
+        covers.cover_pending = Some(cart.clone());
+        covers.sync_with(
+            &mut app,
+            |_, _| panic!("cover should still be pending"),
+            false,
+        );
+        let before = pose(&app);
+        app.update(2.0);
+        assert_eq!(pose(&app), before);
+        covers.cache.push_back(CachedCover {
+            cart,
+            pages: Vec::new(),
+            texture: None,
+            size: None,
+        });
+        covers.cover_pending = None;
+        covers.sync_with(
+            &mut app,
+            |_, _| panic!("missing manual has no texture"),
+            false,
+        );
+        app.update(0.3);
+        assert_ne!(pose(&app), before);
+    }
 
     #[test]
     fn cover_cache_evicts_least_recently_selected_and_releases_storage() {

@@ -725,6 +725,7 @@ pub struct App {
     box_inspection_from_open: bool,
     box_detail_loading: bool,
     box_cart_loading: bool,
+    box_manual_loading: bool,
     box_open_from: boxview::BoxPose,
     manual_cover: Option<(Cart, TexId)>,
     manual_page_count: usize,
@@ -1292,6 +1293,7 @@ impl App {
             box_inspection_from_open: false,
             box_detail_loading: false,
             box_cart_loading: false,
+            box_manual_loading: false,
             box_open_from: boxview::BoxPose {
                 center: [0.0, 0.0],
                 scale: slot_ui::BOX_VIEW_SCALE,
@@ -6096,6 +6098,7 @@ impl App {
             self.box_pending = None;
             self.box_detail_loading = false;
             self.box_cart_loading = false;
+            self.box_manual_loading = false;
             self.box_buttons = [false; 6];
             self.sit(seat);
             self.insert(false);
@@ -8786,9 +8789,11 @@ impl App {
                                     1.0,
                                     out,
                                 );
-                                draw_empty_slot(self.canvas(), self.slot_faces, out);
                             }
                             let box_scene_drawn = self.draw_box_scene(out);
+                            if box_scene_drawn {
+                                draw_empty_slot(self.canvas(), self.slot_faces, out);
+                            }
                             if !box_scene_drawn && !self.draw_unwrap(out) {
                                 self.shelf().draw(
                                     self.canvas(),
@@ -8820,11 +8825,15 @@ impl App {
                         }
                     }
                 }
+                let (box_bar, inspection_bar) = self.box_footer_alphas();
+                let fade_in_hints = |p: f32| (2.0 * p - 1.0).clamp(0.0, 1.0);
+                let fade_out_hints = |p: f32| (1.0 - 2.0 * p).clamp(0.0, 1.0);
                 if self.edit.is_some() && self.core_picker_shown().is_none() {
                     slot_ui::draw_plugged_slot(self.canvas(), self.plugged_face, 1.0, out);
                     self.draw_picking_legends(out);
                     self.draw_heading(out);
                 } else {
+                    let status_start = out.len();
                     draw_footer(
                         self.canvas(),
                         self.gauge(),
@@ -8837,43 +8846,27 @@ impl App {
                         slot_ui::draw_wifi_icon(self.canvas(), self.gauge(), self.wifi_face(), out);
                     }
                     self.draw_kid_icon(out);
+                    let alpha = fade_out_hints(box_bar) * fade_out_hints(inspection_bar);
+                    for draw in &mut out[status_start..] {
+                        match draw {
+                            Draw::Tex { alpha: a, .. } | Draw::Part { alpha: a, .. } => *a *= alpha,
+                            Draw::Rect { colour, .. } => colour[3] *= alpha,
+                            _ => {}
+                        }
+                    }
                 }
-                let bar_alpha = match self.box_scene {
-                    BoxScene::Opening { started } | BoxScene::QuickOpening { started } => {
-                        (self.now().saturating_sub(started) as f32 / BOX_BAR_FADE_MS as f32)
-                            .clamp(0.0, 1.0)
-                    }
-                    BoxScene::FlippingBack { started, .. } => {
-                        (self.now().saturating_sub(started) as f32 / BOX_BAR_FADE_MS as f32)
-                            .clamp(0.0, 1.0)
-                    }
-                    BoxScene::FlippingFront { started, .. } => (1.0
-                        - self.now().saturating_sub(started) as f32 / BOX_FLIP_MS as f32)
-                        .clamp(0.0, 1.0),
-                    BoxScene::Closing { started } => (1.0
-                        - self.now().saturating_sub(started + BOX_CLOSE_MS) as f32
-                            / BOX_BAR_FADE_MS as f32)
-                        .clamp(0.0, 1.0),
-                    BoxScene::QuickClosing { started } => (1.0
-                        - self.now().saturating_sub(started + BOX_QUICK_MS) as f32
-                            / BOX_BAR_FADE_MS as f32)
-                        .clamp(0.0, 1.0),
-                    BoxScene::Open { .. }
-                    | BoxScene::Back { .. }
-                    | BoxScene::PreparingClose { .. } => 1.0,
-                    BoxScene::Carousel | BoxScene::QuickLaunched => 0.0,
-                };
-                if bar_alpha > 0.0 {
+                let bar_alpha = fade_in_hints(box_bar) * fade_out_hints(inspection_bar);
+                if inspection_bar > 0.0 {
                     if self.plugged_face.is_some() {
                         slot_ui::draw_plugged_slot(
                             self.canvas(),
                             self.plugged_face,
-                            bar_alpha,
+                            inspection_bar,
                             out,
                         );
                     } else {
                         let mut colour = slot_ui::housing();
-                        colour[3] *= bar_alpha;
+                        colour[3] *= inspection_bar;
                         out.push(Draw::Rect {
                             x: 0.0,
                             y: self.canvas().h - MOUTH_H,
@@ -8882,8 +8875,8 @@ impl App {
                             colour,
                         });
                     }
-                    slot_ui::draw_slot_back(self.canvas(), self.slot_faces, bar_alpha, out);
-                    slot_ui::draw_slot_front(self.canvas(), self.slot_faces, bar_alpha, out);
+                }
+                if bar_alpha > 0.0 {
                     if self.core_picker_shown().is_none() {
                         let legends = &self.open_box_legends[usize::from(self.light())];
                         if legends.len() >= 5 {
@@ -8913,28 +8906,7 @@ impl App {
                                 BoxScene::Open {
                                     item: BoxItem::Manual,
                                 } => {
-                                    if let Some(reader) = &self.manual_reader {
-                                        let back = if reader.zoom > 1.001 {
-                                            legends[4]
-                                        } else if legends.len() >= 8 {
-                                            legends[6]
-                                        } else {
-                                            legends[0]
-                                        };
-                                        let page = if reader.zoom > 1.001 && legends.len() >= 9 {
-                                            legends[8]
-                                        } else if legends.len() >= 8 {
-                                            legends[7]
-                                        } else {
-                                            legends[1]
-                                        };
-                                        self.draw_spread_legends(
-                                            &[back, page],
-                                            self.canvas().h - MOUTH_H,
-                                            bar_alpha,
-                                            out,
-                                        );
-                                    } else if legends.len() >= 8 {
+                                    if legends.len() >= 8 {
                                         self.draw_spread_legends(
                                             &[legends[1], legends[5]],
                                             self.canvas().h - MOUTH_H,
@@ -8954,8 +8926,16 @@ impl App {
                                     item: BoxItem::Adapter,
                                 } => {
                                     if self.box_adapter_open && legends.len() >= 7 {
+                                        let hints = if self.box_adapter_core_gpsp
+                                            && !self.kid_locked()
+                                            && legends.len() >= 14
+                                        {
+                                            vec![legends[6], legends[13]]
+                                        } else {
+                                            vec![legends[6]]
+                                        };
                                         self.draw_spread_legends(
-                                            &[legends[6]],
+                                            &hints,
                                             self.canvas().h - MOUTH_H,
                                             bar_alpha,
                                             out,
@@ -8987,25 +8967,67 @@ impl App {
                                         out,
                                     );
                                 }
-                                BoxScene::Back { .. } => {
+                                BoxScene::Back { .. }
+                                | BoxScene::FlippingBack { .. }
+                                | BoxScene::FlippingFront { .. }
+                                    if self.box_inspection_from_open =>
+                                {
+                                    let action = if legends.len() >= 10 {
+                                        legends[9]
+                                    } else {
+                                        legends[3]
+                                    };
                                     self.draw_spread_legends(
-                                        &[legends[0], legends[3]],
+                                        &[legends[1], action],
                                         self.canvas().h - MOUTH_H,
                                         bar_alpha,
                                         out,
                                     );
                                 }
-                                BoxScene::FlippingBack { .. } | BoxScene::FlippingFront { .. } => {
-                                    self.draw_spread_legends(
-                                        &[legends[0], legends[3]],
-                                        self.canvas().h - MOUTH_H,
-                                        bar_alpha,
-                                        out,
-                                    )
-                                }
                                 _ => {}
                             }
                         }
+                    }
+                }
+                let inspection_hints = fade_in_hints(inspection_bar);
+                if inspection_hints > 0.0 && self.core_picker_shown().is_none() {
+                    let legends = &self.open_box_legends[usize::from(self.light())];
+                    if legends.len() >= 15 {
+                        let missing_back = self.manual_reader.is_none()
+                            && !self.box_back
+                            && self
+                                .selected_box()
+                                .is_some_and(|(_, faces, _)| faces.back_size == (0, 1));
+                        let hints = if let Some(reader) = &self.manual_reader {
+                            [
+                                Some(if reader.zoom > 1.001 {
+                                    legends[4]
+                                } else {
+                                    legends[6]
+                                }),
+                                Some(legends[11]),
+                                Some(if reader.zoom > 1.001 {
+                                    legends[8]
+                                } else {
+                                    legends[7]
+                                }),
+                            ]
+                        } else if self.box_back {
+                            let zoomed = self.box_resetting
+                                || matches!(self.box_scene, BoxScene::Back { zoom, .. } if zoom > 1.001);
+                            [
+                                Some(if zoomed { legends[4] } else { legends[6] }),
+                                Some(legends[11]),
+                                Some(if zoomed { legends[14] } else { legends[3] }),
+                            ]
+                        } else {
+                            [
+                                Some(legends[6]),
+                                Some(legends[12]),
+                                (!missing_back).then_some(legends[3]),
+                            ]
+                        };
+                        self.draw_inspection_legends(hints, inspection_hints, out);
                     }
                 }
                 if let Some(picker) = self.core_picker_shown() {
@@ -9407,6 +9429,33 @@ impl App {
     ) {
         let alphas = vec![alpha; legends.len()];
         self.draw_spread_legends_each(legends, y, &alphas, out);
+    }
+
+    fn draw_inspection_legends(
+        &self,
+        legends: [Option<(TexId, u32)>; 3],
+        alpha: f32,
+        out: &mut Vec<Draw>,
+    ) {
+        let canvas = self.canvas();
+        let x = [
+            LINK_LEGEND_EDGE,
+            (canvas.w - legends[1].map_or(0, |(_, w)| w) as f32) / 2.0,
+            canvas.w
+                - LINK_LEGEND_EDGE
+                - legends[2].map_or(0, |(_, w)| w.saturating_sub(HINT_EDGE)) as f32,
+        ];
+        for (legend, x) in legends.into_iter().zip(x) {
+            let Some((tex, w)) = legend else { continue };
+            out.push(Draw::Tex {
+                x: x.round(),
+                y: canvas.h - MOUTH_H,
+                w: w as f32,
+                h: MOUTH_H,
+                tex,
+                alpha,
+            });
+        }
     }
 
     fn draw_spread_legends_each(

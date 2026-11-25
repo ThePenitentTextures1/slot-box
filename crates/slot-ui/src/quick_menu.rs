@@ -1541,6 +1541,7 @@ pub enum StudioGlyph {
     Y,
     LeftRight,
     UpDown,
+    Shoulders,
 }
 
 pub fn studio_legend(
@@ -1556,6 +1557,7 @@ pub fn studio_legend(
         StudioGlyph::Y => button_face(ButtonLegend::Y),
         StudioGlyph::LeftRight => button_pair(ButtonLegend::Left, ButtonLegend::Right),
         StudioGlyph::UpDown => up_down_pair(),
+        StudioGlyph::Shoulders => button_pair(ButtonLegend::L1, ButtonLegend::R1),
     };
     with_hint(button, word, Some(ink), hint_on_right)
 }

@@ -237,6 +237,38 @@ fn opening_waits_for_art_without_freezing_and_can_be_cancelled() {
 }
 
 #[test]
+fn opening_waits_for_manual_before_choosing_the_stack() {
+    let root = common::tmp_root_with_carts(&["Game", "Zzz"]);
+    common::write_retail_header(&root, "Game", "POKEMON FIRE", "BPRE");
+    let mut app = setup(root.path());
+    let adapter = adapter_sprites(&mut app);
+    let cart = selected_cart(&app);
+    common::through(&mut app, Btn::A);
+    app.set_box_manual_loading(true);
+    app.update(4.0);
+    assert!(face(&app, adapter).is_none());
+    assert!(face(&app, TexId::from_raw(9000)).is_none());
+    app.set_manual_cover(Some((cart, TexId::from_raw(9000))));
+    app.set_box_manual_loading(false);
+    app.update(1.0);
+    assert!(face(&app, adapter).is_some());
+    assert!(face(&app, TexId::from_raw(9000)).is_some());
+
+    let mut cancelled = setup(root.path());
+    common::through(&mut cancelled, Btn::A);
+    cancelled.set_box_manual_loading(true);
+    cancelled.update(1.0);
+    common::through(&mut cancelled, Btn::B);
+    assert!(cancelled.manual_cover_want().is_none());
+
+    let mut quick = setup(root.path());
+    quick.set_box_manual_loading(true);
+    common::through(&mut quick, Btn::Start);
+    quick.update(2.0);
+    assert!(matches!(quick.phase(), Phase::Inserting { .. }));
+}
+
+#[test]
 fn inspection_zoom_fills_each_screen_width_even_with_a_small_back() {
     for panel in [(720, 480), (640, 480)] {
         for back_width in [100, 720] {
@@ -263,6 +295,8 @@ fn inspection_zoom_fills_each_screen_width_even_with_a_small_back() {
             app.apply(Action::GbaUp(Btn::R1));
             let back = face(&app, art.back).unwrap();
             assert!(((back[1][0] - back[0][0]).abs() - panel.0 as f32).abs() < 0.1);
+            app.apply(Action::GbaDown(Btn::B));
+            app.update(1.0);
             app.apply(Action::GbaDown(Btn::B));
             app.update(0.33);
             equal_pose(carousel, face(&app, art.front).unwrap());
@@ -427,40 +461,6 @@ fn flipping_while_scrolling_starts_at_the_current_box_pose() {
 }
 
 #[test]
-fn closing_footer_fades_only_after_the_box_reaches_the_carousel() {
-    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
-    let mut app = setup(root.path());
-    let plugged = TexId::from_raw(6000);
-    let legends: Vec<_> = (0..5).map(|i| (TexId::from_raw(6010 + i), 70)).collect();
-    app.set_plugged_face(plugged);
-    app.set_open_box_legends([legends.clone(), legends.clone()]);
-    let carousel = face(&app, textures(1000).front).unwrap();
-    open(&mut app);
-    app.apply(Action::GbaDown(Btn::B));
-    app.update(1.70);
-    let alpha = |app: &App| {
-        frame(app).iter().find_map(|d| match d {
-            Draw::Part { tex, alpha, .. } if *tex == plugged => Some(*alpha),
-            _ => None,
-        })
-    };
-    assert_eq!(alpha(&app), Some(1.0));
-    assert!(frame(&app)
-        .iter()
-        .any(|d| matches!(d, Draw::Tex { tex, .. } if *tex == legends[1].0)));
-    app.update(0.11);
-    equal_pose(carousel, face(&app, textures(1000).front).unwrap());
-    assert!(alpha(&app).is_some_and(|a| a > 0.9));
-    app.update(0.05);
-    equal_pose(carousel, face(&app, textures(1000).front).unwrap());
-    assert!(alpha(&app).is_some_and(|a| (a - 0.5).abs() < 0.02));
-    app.update(0.07);
-    assert_eq!(alpha(&app), None);
-    common::through(&mut app, Btn::Right);
-    assert_eq!(app.selected_stem(), Some("Beta"));
-}
-
-#[test]
 fn r2_does_not_leave_carousel_box_inspection() {
     let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
     let mut app = setup(root.path());
@@ -480,8 +480,53 @@ fn r2_does_not_leave_carousel_box_inspection() {
     app.update(0.4);
     equal_pose(zoomed, face(&app, textures(1000).back).unwrap());
     common::through(&mut app, Btn::B);
+    app.update(1.0);
+    assert!(face(&app, textures(1000).back).is_some());
+    common::through(&mut app, Btn::B);
     app.update(0.33);
     assert!(face(&app, textures(1000).front).is_some());
+}
+
+#[test]
+fn box_inspection_b_resets_zoom_and_pan_before_putting_down() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    for from_open in [false, true] {
+        let mut app = setup(root.path());
+        let faces = bar_faces(&mut app, root.path());
+        if from_open {
+            open(&mut app);
+            common::through(&mut app, Btn::Down);
+            app.update(1.0);
+        }
+        common::through(&mut app, Btn::Select);
+        app.update(0.4);
+        common::through(&mut app, Btn::A);
+        app.update(1.0);
+        let back = face(&app, textures(1000).back).unwrap();
+        app.apply(Action::GbaDown(Btn::R1));
+        app.update(0.5);
+        app.apply(Action::GbaUp(Btn::R1));
+        app.apply(Action::GbaDown(Btn::Down));
+        app.update(0.2);
+        app.apply(Action::GbaUp(Btn::Down));
+        let zoomed = face(&app, textures(1000).back).unwrap();
+        assert!(zoomed[1][0] - zoomed[0][0] > back[1][0] - back[0][0]);
+        assert_inspection_bar(&app, &faces, &[4, 11, 14]);
+        common::through(&mut app, Btn::B);
+        app.update(0.05);
+        common::through(&mut app, Btn::B);
+        app.update(1.0);
+        equal_pose(back, face(&app, textures(1000).back).unwrap());
+        assert_inspection_bar(&app, &faces, &[3, 6, 11]);
+        common::through(&mut app, Btn::B);
+        app.update(0.4);
+        assert!(face(&app, textures(1000).front).is_some());
+        if from_open {
+            assert_open_bar(&app, &faces, &[1, 9]);
+        } else {
+            assert_eq!(alpha(&frame(&app), faces.clock), 1.0);
+        }
+    }
 }
 
 #[test]
@@ -559,9 +604,8 @@ fn adapter_sprites(app: &mut App) -> TexId {
 }
 
 fn select_adapter(app: &mut App) {
-    app.apply(Action::GbaDown(Btn::Up));
+    app.apply(Action::GbaDown(Btn::Down));
     app.update(0.3);
-    app.apply(Action::GbaDown(Btn::Up));
     app.apply(Action::GbaDown(Btn::A));
     app.update(0.3);
 }
@@ -641,8 +685,7 @@ fn adapter_preference_persists_and_opens_link_menu_before_play() {
     app.apply(Action::GbaDown(Btn::A));
     app.apply(Action::GbaDown(Btn::B));
     app.update(0.3);
-    app.apply(Action::GbaDown(Btn::Down));
-    app.apply(Action::GbaDown(Btn::Down));
+    app.apply(Action::GbaDown(Btn::Up));
     app.apply(Action::Insert);
     app.update(0.5);
     assert!(matches!(app.phase(), Phase::Inserting { .. }));
@@ -726,6 +769,428 @@ fn frame(app: &App) -> Vec<Draw> {
     draws
 }
 
+struct BarFaces {
+    plugged: TexId,
+    clock: TexId,
+    bolt: TexId,
+    back: TexId,
+    front: TexId,
+    legends: Vec<(TexId, u32)>,
+}
+
+fn bar_faces(app: &mut App, root: &std::path::Path) -> BarFaces {
+    let faces = BarFaces {
+        plugged: TexId::from_raw(6000),
+        clock: TexId::from_raw(6001),
+        back: TexId::from_raw(6002),
+        front: TexId::from_raw(6003),
+        bolt: TexId::from_raw(6004),
+        legends: (0..15).map(|i| (TexId::from_raw(6010 + i), 70)).collect(),
+    };
+    app.set_plugged_face(faces.plugged);
+    app.set_slot_faces(faces.back, faces.front);
+    app.set_shelf_clock_face(faces.clock, 60);
+    app.set_bolt_face(faces.bolt);
+    let (power, _) = common::panel_with_battery(root, std::time::Duration::from_secs(300), 2, 73);
+    app.set_power(power);
+    app.update(0.001);
+    app.set_open_box_legends([faces.legends.clone(), faces.legends.clone()]);
+    faces
+}
+
+fn texture_draws(out: &[Draw], wanted: TexId) -> Vec<(usize, f32)> {
+    out.iter()
+        .enumerate()
+        .filter_map(|(i, draw)| match draw {
+            Draw::Tex { tex, alpha, .. } | Draw::Part { tex, alpha, .. }
+                if *tex == wanted && *alpha > 0.0 =>
+            {
+                Some((i, *alpha))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn alpha(out: &[Draw], tex: TexId) -> f32 {
+    texture_draws(out, tex)
+        .iter()
+        .map(|(_, alpha)| *alpha)
+        .fold(0.0, f32::max)
+}
+
+fn gauge_alpha(out: &[Draw]) -> f32 {
+    out.iter()
+        .find_map(|draw| match draw {
+            Draw::Rect { w, h, colour, .. } if *w == slot_ui::GAUGE_W && *h == slot_ui::WALL => {
+                Some(colour[3])
+            }
+            _ => None,
+        })
+        .unwrap_or(0.0)
+}
+
+fn assert_open_bar(app: &App, faces: &BarFaces, expected: &[usize]) {
+    let out = frame(app);
+    assert_eq!(alpha(&out, faces.plugged), 0.0);
+    assert_eq!(alpha(&out, faces.clock), 0.0);
+    assert_eq!(alpha(&out, faces.bolt), 0.0);
+    assert_eq!(gauge_alpha(&out), 0.0);
+    for tex in [faces.back, faces.front] {
+        assert_eq!(alpha(&out, tex), 1.0, "slot layer {tex:?}");
+    }
+    let shown: Vec<_> = faces
+        .legends
+        .iter()
+        .enumerate()
+        .filter_map(|(i, (tex, _))| (alpha(&out, *tex) > 0.0).then_some(i))
+        .collect();
+    assert_eq!(shown, expected);
+    let mut centres: Vec<_> = out
+        .iter()
+        .filter_map(|draw| match draw {
+            Draw::Tex {
+                tex, x, w, alpha, ..
+            } if *alpha > 0.99 && faces.legends.iter().any(|(t, _)| t == tex) => Some(x + w / 2.0),
+            _ => None,
+        })
+        .collect();
+    centres.sort_by(f32::total_cmp);
+    assert_eq!(centres.len(), 2);
+    assert!(centres[0] < (app.canvas().w - slot_ui::MOUTH_W) / 2.0);
+    assert!(centres[1] > (app.canvas().w + slot_ui::MOUTH_W) / 2.0);
+}
+
+fn assert_inspection_bar(app: &App, faces: &BarFaces, expected: &[usize]) {
+    let out = frame(app);
+    let bar = texture_draws(&out, faces.plugged);
+    assert_eq!(bar.len(), 1);
+    assert_eq!(bar[0].1, 1.0);
+    for tex in [faces.back, faces.front] {
+        let draws = texture_draws(&out, tex);
+        assert!(!draws.is_empty() && draws.iter().all(|(i, _)| *i < bar[0].0));
+    }
+    assert_eq!(alpha(&out, faces.clock), 0.0);
+    assert_eq!(alpha(&out, faces.bolt), 0.0);
+    assert_eq!(gauge_alpha(&out), 0.0);
+    let mut hints = Vec::new();
+    for (i, (tex, _)) in faces.legends.iter().enumerate() {
+        if let Some((at, x, w, a)) = out.iter().enumerate().find_map(|(at, d)| match d {
+            Draw::Tex {
+                tex: t,
+                x,
+                w,
+                alpha,
+                ..
+            } if t == tex && *alpha > 0.0 => Some((at, *x, *w, *alpha)),
+            _ => None,
+        }) {
+            assert!(at > bar[0].0 && a > 0.99);
+            hints.push((i, x + w / 2.0));
+        }
+    }
+    assert_eq!(hints.iter().map(|(i, _)| *i).collect::<Vec<_>>(), expected);
+    hints.sort_by(|a, b| a.1.total_cmp(&b.1));
+    assert_eq!(hints.len(), 3);
+    assert!(hints[0].1 < app.canvas().w / 3.0);
+    assert!((hints[1].1 - app.canvas().w / 2.0).abs() < 30.0);
+    assert!(hints[2].1 > app.canvas().w * 2.0 / 3.0);
+}
+
+#[test]
+fn open_box_footer_replaces_status_without_covering_the_slot_and_reverses() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    let mut app = setup(root.path());
+    let faces = bar_faces(&mut app, root.path());
+    let carousel = face(&app, textures(1000).front).unwrap();
+    let out = frame(&app);
+    assert_eq!(alpha(&out, faces.clock), 1.0);
+    assert_eq!(alpha(&out, faces.bolt), 1.0);
+    assert_eq!(gauge_alpha(&out), 1.0);
+    assert_eq!(alpha(&out, faces.plugged), 0.0);
+
+    common::through(&mut app, Btn::A);
+    app.update(0.03);
+    equal_pose(carousel, face(&app, textures(1000).front).unwrap());
+    let out = frame(&app);
+    assert!(alpha(&out, faces.clock) > 0.0 && alpha(&out, faces.clock) < 1.0);
+    assert!(alpha(&out, faces.bolt) > 0.0 && alpha(&out, faces.bolt) < 1.0);
+    assert!(gauge_alpha(&out) > 0.0 && gauge_alpha(&out) < 1.0);
+    assert_eq!(alpha(&out, faces.plugged), 0.0);
+    assert_eq!(alpha(&out, faces.back), 1.0);
+    assert_eq!(alpha(&out, faces.front), 1.0);
+    assert_eq!(alpha(&out, faces.legends[1].0), 0.0);
+    app.update(0.06);
+    let out = frame(&app);
+    assert_eq!(alpha(&out, faces.clock), 0.0);
+    assert!(alpha(&out, faces.legends[1].0) > 0.0);
+    app.update(1.69);
+    assert_open_bar(&app, &faces, &[1, 2]);
+
+    common::through(&mut app, Btn::B);
+    app.update(1.70);
+    assert_open_bar(&app, &faces, &[1, 2]);
+    app.update(0.13);
+    let out = frame(&app);
+    assert_eq!(alpha(&out, faces.clock), 0.0);
+    assert!(alpha(&out, faces.legends[1].0) > 0.0);
+    app.update(0.06);
+    equal_pose(carousel, face(&app, textures(1000).front).unwrap());
+    let out = frame(&app);
+    assert!(alpha(&out, faces.clock) > 0.0 && alpha(&out, faces.clock) < 1.0);
+    assert_eq!(alpha(&out, faces.legends[1].0), 0.0);
+    assert_eq!(alpha(&out, faces.plugged), 0.0);
+    assert_eq!(alpha(&out, faces.back), 1.0);
+    assert_eq!(alpha(&out, faces.front), 1.0);
+    app.update(0.1);
+    let out = frame(&app);
+    assert_eq!(alpha(&out, faces.clock), 1.0);
+    assert_eq!(alpha(&out, faces.bolt), 1.0);
+    assert_eq!(gauge_alpha(&out), 1.0);
+    assert!(faces
+        .legends
+        .iter()
+        .all(|(tex, _)| alpha(&out, *tex) == 0.0));
+    common::through(&mut app, Btn::Right);
+    assert_eq!(app.selected_stem(), Some("Beta"));
+}
+
+#[test]
+fn manual_and_box_inspection_cover_the_slot_then_restore_open_box_hints() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    for manual in [true, false] {
+        let mut app = setup(root.path());
+        let faces = bar_faces(&mut app, root.path());
+        app.set_manual_cover(Some((selected_cart(&app), TexId::from_raw(9000))));
+        app.set_manual_page_count(2);
+        open(&mut app);
+        common::through(&mut app, if manual { Btn::Up } else { Btn::Down });
+        app.update(1.0);
+        assert_open_bar(&app, &faces, if manual { &[1, 5] } else { &[1, 9] });
+        common::through(&mut app, if manual { Btn::A } else { Btn::Select });
+        app.update(0.06);
+        let out = frame(&app);
+        let bar = texture_draws(&out, faces.plugged);
+        assert_eq!(bar.len(), 1);
+        assert!(bar[0].1 > 0.0 && bar[0].1 < 1.0);
+        for tex in [faces.back, faces.front] {
+            assert!(texture_draws(&out, tex).iter().all(|(i, _)| *i < bar[0].0));
+        }
+        app.update(0.6);
+        assert_inspection_bar(&app, &faces, if manual { &[6, 7, 11] } else { &[3, 6, 12] });
+        if !manual {
+            common::through(&mut app, Btn::A);
+            app.update(1.0);
+            assert_inspection_bar(&app, &faces, &[3, 6, 11]);
+        }
+        common::through(&mut app, Btn::B);
+        app.update(0.06);
+        let out = frame(&app);
+        let bar = texture_draws(&out, faces.plugged);
+        assert_eq!(bar.len(), 1);
+        assert!(bar[0].1 > 0.0 && bar[0].1 < 1.0);
+        app.update(0.6);
+        assert_open_bar(&app, &faces, if manual { &[1, 5] } else { &[1, 9] });
+    }
+}
+
+#[test]
+fn carousel_inspection_fades_between_status_and_plugged_bar() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    let mut app = setup(root.path());
+    let faces = bar_faces(&mut app, root.path());
+    common::through(&mut app, Btn::Select);
+    app.update(0.03);
+    let out = frame(&app);
+    assert!(alpha(&out, faces.clock) > 0.0 && alpha(&out, faces.clock) < 1.0);
+    assert!(alpha(&out, faces.plugged) > 0.0 && alpha(&out, faces.plugged) < 1.0);
+    app.update(0.4);
+    assert_inspection_bar(&app, &faces, &[3, 6, 12]);
+    common::through(&mut app, Btn::B);
+    app.update(0.09);
+    let out = frame(&app);
+    assert!(alpha(&out, faces.clock) > 0.0 && alpha(&out, faces.clock) < 1.0);
+    assert!(alpha(&out, faces.plugged) > 0.0 && alpha(&out, faces.plugged) < 1.0);
+    app.update(0.4);
+    let out = frame(&app);
+    assert_eq!(alpha(&out, faces.clock), 1.0);
+    assert_eq!(alpha(&out, faces.plugged), 0.0);
+    assert!(faces
+        .legends
+        .iter()
+        .all(|(tex, _)| alpha(&out, *tex) == 0.0));
+}
+
+#[test]
+fn inspection_hints_never_overlap_open_box_hints_during_transitions() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    for panel in [(640, 480), (720, 480)] {
+        for manual in [true, false] {
+            let mut app = setup(root.path());
+            app.set_panel(panel);
+            let faces = bar_faces(&mut app, root.path());
+            app.set_manual_cover(Some((selected_cart(&app), TexId::from_raw(9000))));
+            app.set_manual_page_count(2);
+            open(&mut app);
+            common::through(&mut app, if manual { Btn::Up } else { Btn::Down });
+            app.update(1.0);
+            let open_hints = if manual { [1, 5] } else { [1, 9] };
+            let inspection_hints = if manual { [6, 7, 11] } else { [3, 6, 12] };
+            for button in [if manual { Btn::A } else { Btn::Select }, Btn::B] {
+                common::through(&mut app, button);
+                let mut saw_open = false;
+                let mut saw_inspection = false;
+                for _ in 0..20 {
+                    app.update(0.02);
+                    let out = frame(&app);
+                    let open = open_hints
+                        .iter()
+                        .any(|&i| alpha(&out, faces.legends[i].0) > 0.001);
+                    let inspection = inspection_hints
+                        .iter()
+                        .any(|&i| alpha(&out, faces.legends[i].0) > 0.001);
+                    assert!(
+                        !(open && inspection),
+                        "overlapping footer hints on {panel:?}, manual={manual}"
+                    );
+                    saw_open |= open;
+                    saw_inspection |= inspection;
+                }
+                assert!(saw_open && saw_inspection);
+            }
+        }
+    }
+}
+
+#[test]
+fn inspection_does_not_offer_flip_when_box_back_is_unavailable() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    write_carousel_view(root.path(), CarouselView::Boxes).unwrap();
+    let want = common::boot(root.path()).box_face_wants()[0];
+    let mut app = setup(root.path());
+    let faces = bar_faces(&mut app, root.path());
+    let mut box_faces = textures(1000);
+    box_faces.back_size = (0, 1);
+    app.set_box_faces(want.shelf, want.index, Some(box_faces));
+    common::through(&mut app, Btn::Select);
+    app.update(0.4);
+    let out = frame(&app);
+    assert_eq!(alpha(&out, faces.legends[6].0), 1.0);
+    assert_eq!(alpha(&out, faces.legends[12].0), 1.0);
+    assert_eq!(alpha(&out, faces.legends[3].0), 0.0);
+    assert_eq!(alpha(&out, faces.plugged), 1.0);
+    let center = face(&app, faces.legends[12].0).unwrap();
+    assert!(((center[0][0] + center[1][0]) / 2.0 - app.canvas().w / 2.0).abs() < 0.1);
+}
+
+#[test]
+fn picked_up_gpsp_adapter_shows_put_down_and_save_hints() {
+    use slot_store::{write_selected_core, Core, Platform};
+    let root = common::tmp_root_with_carts(&["Game", "Zzz"]);
+    common::write_retail_header(&root, "Game", "POKEMON FIRE", "BPRE");
+    write_selected_core(root.path(), Platform::Gba, "Game", Core::Gpsp).unwrap();
+    let mut app = setup(root.path());
+    let faces = bar_faces(&mut app, root.path());
+    adapter_sprites(&mut app);
+    app.set_manual_cover(Some((selected_cart(&app), TexId::from_raw(9000))));
+    open(&mut app);
+    common::through(&mut app, Btn::Down);
+    app.update(1.0);
+    common::through(&mut app, Btn::A);
+    app.update(0.3);
+    assert_open_bar(&app, &faces, &[6, 13]);
+}
+
+#[test]
+fn inspection_hints_fit_without_overlap_on_supported_panels() {
+    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
+    let artwork = [
+        (slot_ui::StudioGlyph::B, "Close", true),
+        (slot_ui::StudioGlyph::UpDown, "Select", true),
+        (slot_ui::StudioGlyph::A, "Play", false),
+        (slot_ui::StudioGlyph::A, "Flip", false),
+        (slot_ui::StudioGlyph::B, "Reset zoom", true),
+        (slot_ui::StudioGlyph::A, "Read", false),
+        (slot_ui::StudioGlyph::B, "Put down", true),
+        (slot_ui::StudioGlyph::LeftRight, "Pages", false),
+        (slot_ui::StudioGlyph::LeftRight, "Pan", false),
+        (slot_ui::StudioGlyph::A, "Inspect", false),
+        (slot_ui::StudioGlyph::A, "Pick up", false),
+        (slot_ui::StudioGlyph::Shoulders, "Zoom", false),
+        (slot_ui::StudioGlyph::LeftRight, "Put down", false),
+        (slot_ui::StudioGlyph::A, "Save", false),
+        (slot_ui::StudioGlyph::UpDown, "Scan", false),
+    ]
+    .map(|(glyph, label, left)| {
+        slot_ui::studio_legend(glyph, label, slot_ui::footer_ink(false), left)
+    });
+    for panel in [(640, 480), (720, 480)] {
+        for manual in [true, false] {
+            let mut app = setup(root.path());
+            app.set_panel(panel);
+            let mut faces = bar_faces(&mut app, root.path());
+            for (legend, art) in faces.legends.iter_mut().zip(&artwork) {
+                legend.1 = art.w;
+            }
+            app.set_open_box_legends([faces.legends.clone(), faces.legends.clone()]);
+            app.set_manual_cover(Some((selected_cart(&app), TexId::from_raw(9000))));
+            app.set_manual_page_count(2);
+            app.set_manual_page_sizes(vec![(0, 1600, 844)]);
+            open(&mut app);
+            common::through(&mut app, if manual { Btn::Up } else { Btn::Down });
+            app.update(1.0);
+            common::through(&mut app, if manual { Btn::A } else { Btn::Select });
+            app.update(0.6);
+            let check = |app: &App, expected: &[usize]| {
+                let out = frame(app);
+                let mut bounds = Vec::new();
+                for &i in expected {
+                    let art = &artwork[i];
+                    let (x, w) = out
+                        .iter()
+                        .find_map(|d| match d {
+                            Draw::Tex {
+                                tex, x, w, alpha, ..
+                            } if *tex == faces.legends[i].0 && *alpha > 0.99 => Some((*x, *w)),
+                            _ => None,
+                        })
+                        .unwrap();
+                    let visible: Vec<_> = (0..art.w)
+                        .filter(|&x| {
+                            (0..art.h).any(|y| art.rgba[((y * art.w + x) * 4 + 3) as usize] != 0)
+                        })
+                        .collect();
+                    bounds.push((
+                        x + visible[0] as f32 * w / art.w as f32,
+                        x + (visible[visible.len() - 1] + 1) as f32 * w / art.w as f32,
+                    ));
+                }
+                bounds.sort_by(|a, b| a.0.total_cmp(&b.0));
+                assert!(bounds[0].0 >= 0.0 && bounds[2].1 <= app.canvas().w);
+                assert!(
+                    bounds[0].1 < bounds[1].0 && bounds[1].1 < bounds[2].0,
+                    "overlapping inspection hints on {panel:?}: {bounds:?}"
+                );
+                assert!(bounds[0].1 < app.canvas().w / 3.0);
+                assert!(bounds[1].0 < app.canvas().w / 2.0 && bounds[1].1 > app.canvas().w / 2.0);
+                assert!(bounds[2].0 > app.canvas().w * 2.0 / 3.0);
+            };
+            if manual {
+                check(&app, &[6, 11, 7]);
+            } else {
+                check(&app, &[6, 12, 3]);
+                common::through(&mut app, Btn::A);
+                app.update(1.0);
+                check(&app, &[6, 11, 3]);
+            }
+            app.apply(Action::GbaDown(Btn::R1));
+            app.update(1.0);
+            app.apply(Action::GbaUp(Btn::R1));
+            check(&app, if manual { &[4, 11, 8] } else { &[4, 11, 14] });
+        }
+    }
+}
+
 #[test]
 fn box_waits_for_cartridge_to_be_put_down_before_rising() {
     let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
@@ -789,93 +1254,20 @@ fn cartridge_and_box_selection_move_in_smooth_stages_in_both_directions() {
 }
 
 #[test]
-fn open_box_footer_covers_slot_box_and_status_before_legends() {
+fn quick_start_keeps_the_slot_visible_without_control_hints() {
     let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
     let mut app = setup(root.path());
-    let plugged = TexId::from_raw(6000);
-    let clock = TexId::from_raw(6001);
-    let slot_back = TexId::from_raw(6002);
-    let slot_front = TexId::from_raw(6003);
-    let legends: Vec<_> = (0..5).map(|i| (TexId::from_raw(6010 + i), 70)).collect();
-    app.set_plugged_face(plugged);
-    app.set_slot_faces(slot_back, slot_front);
-    app.set_shelf_clock_face(clock, 60);
-    app.set_open_box_legends([legends.clone(), legends.clone()]);
-    open(&mut app);
+    let faces = bar_faces(&mut app, root.path());
+    common::through(&mut app, Btn::Start);
+    app.update(0.13);
     let out = frame(&app);
-    let index = |tex| {
-        out.iter()
-            .position(|d| match d {
-                Draw::Tex { tex: t, .. }
-                | Draw::Part { tex: t, .. }
-                | Draw::PerspectiveQuad { tex: t, .. } => *t == tex,
-                _ => false,
-            })
-            .unwrap()
-    };
-    let bar = index(plugged);
-    assert!(index(clock) < bar);
-    assert!(index(textures(1000).front) < bar);
-    let last_index = |tex| {
-        out.iter()
-            .rposition(|d| matches!(d, Draw::Part { tex: t, .. } if *t == tex))
-            .unwrap()
-    };
-    assert!(bar < last_index(slot_back) && last_index(slot_back) < last_index(slot_front));
-    assert!(
-        last_index(slot_front) < index(legends[1].0)
-            && last_index(slot_front) < index(legends[2].0)
-    );
-    assert!(!out
+    assert_eq!(alpha(&out, faces.plugged), 0.0);
+    assert_eq!(alpha(&out, faces.back), 1.0);
+    assert_eq!(alpha(&out, faces.front), 1.0);
+    assert!(faces
+        .legends
         .iter()
-        .any(|d| matches!(d, Draw::Tex { tex, .. } if *tex == legends[0].0)));
-    let legend_x = |tex| {
-        out.iter()
-            .find_map(|d| match d {
-                Draw::Tex { tex: t, x, w, .. } if *t == tex => Some((*x, *w)),
-                _ => None,
-            })
-            .unwrap()
-    };
-    let (left_x, left_w) = legend_x(legends[1].0);
-    let (right_x, _) = legend_x(legends[2].0);
-    assert!(left_x + left_w < (app.canvas().w - slot_ui::MOUTH_W) / 2.0);
-    assert!(right_x > (app.canvas().w + slot_ui::MOUTH_W) / 2.0);
-    assert!(matches!(out[bar], Draw::Part { y, h, alpha: 1.0, .. }
-        if y == slot_ui::OUT_H as f32 - slot_ui::MOUTH_H && h == slot_ui::MOUTH_H));
-}
-
-#[test]
-fn quick_start_and_inspection_keep_both_slot_layers_above_the_overlay() {
-    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
-    for quick in [true, false] {
-        let mut app = setup(root.path());
-        let plugged = TexId::from_raw(6000);
-        let slot_back = TexId::from_raw(6002);
-        let slot_front = TexId::from_raw(6003);
-        let legends: Vec<_> = (0..5).map(|i| (TexId::from_raw(6010 + i), 70)).collect();
-        app.set_plugged_face(plugged);
-        app.set_slot_faces(slot_back, slot_front);
-        app.set_open_box_legends([legends.clone(), legends.clone()]);
-        common::through(&mut app, if quick { Btn::Start } else { Btn::Select });
-        app.update(0.13);
-        let out = frame(&app);
-        let last = |tex| {
-            out.iter()
-                .rposition(|d| matches!(d, Draw::Part { tex: t, .. } if *t == tex))
-                .unwrap()
-        };
-        assert!(last(plugged) < last(slot_back) && last(slot_back) < last(slot_front));
-        if quick {
-            assert!(!out.iter().any(
-                |d| matches!(d, Draw::Tex { tex, .. } if legends.iter().any(|l| l.0 == *tex))
-            ));
-        } else {
-            assert!(out
-                .iter()
-                .any(|d| matches!(d, Draw::Tex { tex, .. } if *tex == legends[3].0)));
-        }
-    }
+        .all(|(tex, _)| alpha(&out, *tex) == 0.0));
 }
 
 #[test]
@@ -994,23 +1386,21 @@ fn opening_stages_follow_the_agreed_timeline() {
 }
 
 #[test]
-fn footer_fades_in_before_the_box_moves_and_also_marks_inspection() {
+fn opening_waits_for_footer_and_carousel_inspection_blocks_other_actions() {
     let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
     let mut app = setup(root.path());
     let plugged = TexId::from_raw(6000);
-    let legends: Vec<_> = (0..5).map(|i| (TexId::from_raw(6010 + i), 70)).collect();
+    let legends: Vec<_> = (0..15).map(|i| (TexId::from_raw(6010 + i), 70)).collect();
     app.set_plugged_face(plugged);
     app.set_open_box_legends([legends.clone(), legends.clone()]);
     let before = face(&app, textures(1000).front).unwrap();
     common::through(&mut app, Btn::A);
-    app.update(0.06);
+    app.update(0.09);
     equal_pose(before, face(&app, textures(1000).front).unwrap());
     let out = frame(&app);
-    assert!(out.iter().any(|d| matches!(d, Draw::Part { tex, alpha, .. }
-        if *tex == plugged && (*alpha - 0.5).abs() < 0.02)));
     assert!(out.iter().any(|d| matches!(d, Draw::Tex { tex, alpha, .. }
         if *tex == legends[1].0 && (*alpha - 0.5).abs() < 0.02)));
-    app.update(0.06);
+    app.update(0.03);
     equal_pose(before, face(&app, textures(1000).front).unwrap());
     app.update(0.1);
     assert_ne!(before, face(&app, textures(1000).front).unwrap());
@@ -1038,8 +1428,9 @@ fn footer_fades_in_before_the_box_moves_and_also_marks_inspection() {
             .unwrap()
     };
     assert!(index(textures(1000).front) < index(plugged));
-    assert!(index(plugged) < index(legends[0].0));
+    assert!(index(plugged) < index(legends[6].0));
     assert!(index(plugged) < index(legends[3].0));
+    assert!(index(plugged) < index(legends[12].0));
     assert!(!out
         .iter()
         .any(|d| matches!(d, Draw::Tex { tex, .. } if *tex == legends[1].0)));
@@ -2081,6 +2472,298 @@ fn no_manual_leaves_cartridge_as_the_top_item() {
 }
 
 #[test]
+fn open_box_contents_form_a_vertical_stack_with_available_items() {
+    for panel in [(640, 480), (720, 480)] {
+        for (title, code, gbc, has_manual, has_adapter) in [
+            ("POKEMON FIRE", "BPRE", false, true, true),
+            ("OTHER GAME", "ABCE", false, true, false),
+            ("POKEMON FIRE", "BPRE", false, false, false),
+            ("GBC GAME", "", true, true, false),
+            ("GBC GAME", "", true, false, false),
+        ] {
+            let root = if gbc {
+                common::tmp_root_with_gbc_carts(&["Game", "Zzz"])
+            } else {
+                let root = common::tmp_root_with_carts(&["Game", "Zzz"]);
+                common::write_retail_header(&root, "Game", title, code);
+                root
+            };
+            let mut app = setup(root.path());
+            app.set_panel(panel);
+            let adapter = adapter_sprites(&mut app);
+            let manual = TexId::from_raw(9000);
+            if has_manual {
+                app.set_manual_cover(Some((selected_cart(&app), manual)));
+            }
+            open(&mut app);
+            app.apply(Action::GbaDown(Btn::Down));
+            app.update(1.0);
+            if has_adapter {
+                app.apply(Action::GbaDown(Btn::Down));
+                app.update(1.0);
+            }
+
+            let cart = face(&app, TexId::from_raw(2000)).unwrap();
+            let box_face = face(&app, textures(1000).front).unwrap();
+            let manual_face = face(&app, manual);
+            let adapter_face = face(&app, adapter);
+            assert_eq!(manual_face.is_some(), has_manual, "{title}");
+            assert_eq!(adapter_face.is_some(), has_adapter, "{title}");
+
+            let mut stack = Vec::new();
+            if let Some(manual_face) = manual_face {
+                stack.push(("manual", manual_face));
+            }
+            stack.push(("cartridge", cart));
+            if let Some(adapter_face) = adapter_face {
+                stack.push(("adapter", adapter_face));
+            }
+            stack.push(("box", box_face));
+            for pair in stack.windows(2) {
+                let (upper_name, upper) = pair[0];
+                let (lower_name, lower) = pair[1];
+                assert!(
+                    upper[3][1] < lower[0][1],
+                    "{title}: {upper_name} must be above {lower_name}: {upper:?} {lower:?}"
+                );
+                let upper_center = (upper[0][0] + upper[1][0]) / 2.0;
+                let lower_center = (lower[0][0] + lower[1][0]) / 2.0;
+                assert!(
+                    (upper_center - lower_center).abs() < 0.1,
+                    "{title}: {upper_name} and {lower_name} should be horizontally aligned"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn manual_slides_out_behind_cartridge_and_adapter_during_extraction() {
+    let root = common::tmp_root_with_carts(&["Game", "Zzz"]);
+    common::write_retail_header(&root, "Game", "POKEMON FIRE", "BPRE");
+    let mut app = setup(root.path());
+    let adapter = adapter_sprites(&mut app);
+    let manual = TexId::from_raw(9000);
+    let cart = TexId::from_raw(2000);
+    app.set_manual_cover(Some((selected_cart(&app), manual)));
+    common::through(&mut app, Btn::A);
+    app.update(0.7);
+    assert!(face(&app, manual).is_none());
+    app.update(0.20);
+    let adapter_early = face(&app, adapter).unwrap();
+    let box_early = face(&app, textures(1000).front).unwrap();
+    assert!(adapter_early[0][0] >= box_early[0][0]);
+    assert!(adapter_early[1][0] <= box_early[1][0]);
+    assert!(adapter_early[0][1] >= box_early[0][1]);
+    assert!(adapter_early[3][1] <= box_early[3][1]);
+    let early = face(&app, manual).unwrap();
+    let early_cart = face(&app, cart).unwrap();
+    for dt in [0.0, 0.14] {
+        app.update(dt);
+        let draws = frame(&app);
+        let position = |target| {
+            draws
+                .iter()
+                .position(|draw| matches!(draw, Draw::Tex { tex, .. } if *tex == target))
+                .unwrap()
+        };
+        assert!(position(manual) < position(cart));
+        assert!(position(manual) < position(adapter));
+    }
+    let middle = face(&app, manual).unwrap();
+    let middle_cart = face(&app, cart).unwrap();
+    app.update(0.31);
+    let extracted = face(&app, manual).unwrap();
+    let extracted_cart = face(&app, cart).unwrap();
+    assert!(early[0][1] > middle[0][1]);
+    assert!(middle[0][1] > extracted[0][1]);
+    assert!(((early[0][1] - early_cart[0][1]) - (middle[0][1] - middle_cart[0][1])).abs() < 0.01);
+    assert!(extracted[0][1] - extracted_cart[0][1] < middle[0][1] - middle_cart[0][1]);
+}
+
+#[test]
+fn extraction_keeps_contents_behind_box_across_platforms_and_panels() {
+    for panel in [(640, 480), (720, 480)] {
+        for (gbc, manual, adapter) in [
+            (false, true, true),
+            (false, true, false),
+            (true, true, false),
+            (false, false, false),
+            (true, false, false),
+        ] {
+            let root = if gbc {
+                common::tmp_root_with_gbc_carts(&["Game", "Zzz"])
+            } else {
+                let root = common::tmp_root_with_carts(&["Game", "Zzz"]);
+                if adapter {
+                    common::write_retail_header(&root, "Game", "POKEMON FIRE", "BPRE");
+                }
+                root
+            };
+            let mut app = setup(root.path());
+            app.set_panel(panel);
+            let adapter_tex = adapter_sprites(&mut app);
+            let manual_tex = TexId::from_raw(9000);
+            let cart_tex = TexId::from_raw(2000);
+            let box_tex = textures(1000).front;
+            if manual {
+                app.set_manual_cover(Some((selected_cart(&app), manual_tex)));
+            }
+            common::through(&mut app, Btn::A);
+            app.update(0.84);
+            for _ in 0..15 {
+                let draws = frame(&app);
+                let box_index = draws
+                    .iter()
+                    .position(
+                        |draw| matches!(draw, Draw::PerspectiveQuad { tex, .. } if *tex == box_tex),
+                    )
+                    .unwrap();
+                let box_face = face(&app, box_tex).unwrap();
+                let mut contents = vec![cart_tex];
+                if manual {
+                    contents.push(manual_tex);
+                }
+                if adapter {
+                    contents.push(adapter_tex);
+                }
+                for tex in contents {
+                    let item = face(&app, tex).unwrap();
+                    let item_index = draws
+                        .iter()
+                        .position(|draw| match draw {
+                            Draw::Tex { tex: t, .. } | Draw::PerspectiveQuad { tex: t, .. } => {
+                                *t == tex
+                            }
+                            _ => false,
+                        })
+                        .unwrap();
+                    assert!(
+                        item_index < box_index && item[3][1] <= box_face[3][1] + 0.01,
+                        "{panel:?} gbc={gbc} manual={manual} adapter={adapter}: item {tex:?} escaped below box"
+                    );
+                }
+                app.update(0.05);
+            }
+        }
+    }
+}
+
+#[test]
+fn adapter_and_box_remain_separated_while_changing_selection() {
+    let root = common::tmp_root_with_carts(&["Game", "Zzz"]);
+    common::write_retail_header(&root, "Game", "POKEMON FIRE", "BPRE");
+    let mut app = setup(root.path());
+    let adapter = adapter_sprites(&mut app);
+    app.set_manual_cover(Some((selected_cart(&app), TexId::from_raw(9000))));
+    open(&mut app);
+    app.apply(Action::GbaDown(Btn::Down));
+    app.update(1.0);
+    for button in [Btn::Down, Btn::Up] {
+        app.apply(Action::GbaDown(button));
+        for _ in 0..20 {
+            app.update(0.02);
+            let adapter_face = face(&app, adapter).unwrap();
+            let box_face = face(&app, textures(1000).front).unwrap();
+            assert!(
+                adapter_face[3][1] <= box_face[0][1] + 0.01,
+                "adapter and box overlap: {adapter_face:?} {box_face:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn adapter_stays_above_box_when_cartridge_is_picked_up_or_selected() {
+    for panel in [(640, 480), (720, 480)] {
+        let root = common::tmp_root_with_carts(&["Game", "Zzz"]);
+        common::write_retail_header(&root, "Game", "POKEMON FIRE", "BPRE");
+        let mut app = setup(root.path());
+        app.set_panel(panel);
+        let adapter = adapter_sprites(&mut app);
+        app.set_manual_cover(Some((selected_cart(&app), TexId::from_raw(9000))));
+        common::through(&mut app, Btn::A);
+        app.update(1.25);
+        for _ in 0..53 {
+            let adapter_face = face(&app, adapter).unwrap();
+            let box_face = face(&app, textures(1000).front).unwrap();
+            assert!(
+                adapter_face[3][1] + 11.99 <= box_face[0][1],
+                "{panel:?} during pickup: adapter overlaps box: {adapter_face:?} {box_face:?}"
+            );
+            app.update(0.01);
+        }
+        for button in [None, Some(Btn::Down), Some(Btn::Up)] {
+            if let Some(button) = button {
+                app.apply(Action::GbaDown(button));
+            }
+            for _ in 0..30 {
+                app.update(0.01);
+                let adapter_face = face(&app, adapter).unwrap();
+                let box_face = face(&app, textures(1000).front).unwrap();
+                assert!(
+                    adapter_face[3][1] + 11.99 <= box_face[0][1],
+                    "{panel:?} {button:?}: adapter overlaps box: {adapter_face:?} {box_face:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn inspection_starts_at_the_box_pose_when_leaving_the_adapter() {
+    let root = common::tmp_root_with_carts(&["Game", "Zzz"]);
+    common::write_retail_header(&root, "Game", "POKEMON FIRE", "BPRE");
+    let mut app = setup(root.path());
+    adapter_sprites(&mut app);
+    app.set_manual_cover(Some((selected_cart(&app), TexId::from_raw(9000))));
+    open(&mut app);
+    app.apply(Action::GbaDown(Btn::Down));
+    app.update(1.0);
+    app.apply(Action::GbaDown(Btn::Down));
+    app.update(0.08);
+    let before = face(&app, textures(1000).front).unwrap();
+    app.apply(Action::GbaDown(Btn::A));
+    equal_pose(before, face(&app, textures(1000).front).unwrap());
+}
+
+#[test]
+fn adapter_navigation_follows_the_vertical_stack_in_both_directions() {
+    let root = common::tmp_root_with_carts(&["Game", "Zzz"]);
+    common::write_retail_header(&root, "Game", "POKEMON FIRE", "BPRE");
+    let mut app = setup(root.path());
+    let adapter = adapter_sprites(&mut app);
+    let manual = TexId::from_raw(9000);
+    app.set_manual_cover(Some((selected_cart(&app), manual)));
+    app.set_manual_page_count(1);
+    open(&mut app);
+    let picked_cart = face(&app, TexId::from_raw(2000)).unwrap();
+
+    // Cartridge -> adapter -> box -> adapter.
+    for button in [Btn::Down, Btn::Down, Btn::Up] {
+        app.apply(Action::GbaDown(button));
+        app.update(1.0);
+    }
+    common::through(&mut app, Btn::A);
+    app.update(0.3);
+    let picked_adapter = face(&app, adapter).unwrap();
+    assert!((picked_adapter[1][0] - picked_adapter[0][0] - 290.0).abs() < 0.01);
+    common::through(&mut app, Btn::B);
+    app.update(0.3);
+
+    // Adapter -> cartridge -> manual.
+    app.apply(Action::GbaDown(Btn::Up));
+    app.update(1.0);
+    equal_pose(picked_cart, face(&app, TexId::from_raw(2000)).unwrap());
+    app.apply(Action::GbaDown(Btn::Up));
+    app.update(1.0);
+    let selected_manual = face(&app, manual).unwrap();
+    let manual_center = (selected_manual[0][1] + selected_manual[3][1]) / 2.0;
+    let cart_center = (picked_cart[0][1] + picked_cart[3][1]) / 2.0;
+    assert!((manual_center - cart_center).abs() < 0.01);
+}
+
+#[test]
 fn cartridge_actions_wait_when_returning_from_the_manual() {
     let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
     let mut app = setup(root.path());
@@ -2121,8 +2804,10 @@ fn open_box_controls_flip_zoom_pan_and_close_without_changing_shelf() {
     let panned = face(&app, textures(1000).back).unwrap();
     assert!((panned[0][0] - zoomed[0][0]).abs() < 0.1);
     app.apply(Action::GbaDown(Btn::B));
-    app.update(0.33);
+    app.update(1.0);
     assert!(matches!(app.phase(), Phase::Shelf));
+    app.apply(Action::GbaDown(Btn::B));
+    app.update(0.33);
     app.apply(Action::GbaDown(Btn::B));
     app.update(1.81);
     assert!(face(&app, textures(1000).front).is_some());
@@ -2252,15 +2937,28 @@ fn remapped_collection_controls_work_on_the_box_carousel() {
 
 #[test]
 fn missing_box_art_keeps_normal_cartridge_launch() {
-    let root = common::tmp_root_with_carts(&["Alpha", "Beta"]);
-    write_carousel_view(root.path(), CarouselView::Boxes).unwrap();
-    let mut app = common::boot(root.path());
-    assert!(matches!(app.phase(), Phase::Shelf));
-    let selected = app.box_face_wants()[0];
-    app.set_box_faces(selected.shelf, selected.index, None);
-    app.apply(Action::GbaDown(Btn::A));
-    app.apply(Action::GbaUp(Btn::A));
-    assert!(matches!(app.phase(), Phase::Inserting { .. }));
+    for panel in [(640, 480), (720, 480)] {
+        for gbc in [false, true] {
+            let root = if gbc {
+                common::tmp_root_with_gbc_carts(&["Alpha", "Beta"])
+            } else {
+                common::tmp_root_with_carts(&["Alpha", "Beta"])
+            };
+            write_carousel_view(root.path(), CarouselView::Boxes).unwrap();
+            let mut app = common::boot(root.path());
+            app.set_panel(panel);
+            assert!(matches!(app.phase(), Phase::Shelf));
+            let selected = app.box_face_wants()[0];
+            app.set_box_faces(selected.shelf, selected.index, None);
+            let cart = TexId::from_raw(2000);
+            app.set_cart_face(selected.shelf, selected.index, cart);
+            assert!(face(&app, cart).is_some());
+            assert!(app.manual_cover_want().is_none());
+            app.apply(Action::GbaDown(Btn::A));
+            app.apply(Action::GbaUp(Btn::A));
+            assert!(matches!(app.phase(), Phase::Inserting { .. }));
+        }
+    }
 }
 
 #[cfg(feature = "nds")]

@@ -1,6 +1,8 @@
 use super::*;
 
 const AUTO_LINK_FILE: &str = "Config/auto_link_menu.txt";
+const ADAPTER_FOCUS: f32 = 0.4;
+const STACK_GAP: f32 = 12.0;
 
 fn adapter_game(cart: &Cart) -> bool {
     if cart.platform != Platform::Gba {
@@ -127,6 +129,36 @@ fn manual_turn(
 }
 
 impl App {
+    fn box_art_loading(&self) -> bool {
+        self.box_detail_loading
+            || self.box_cart_loading
+            || (self.box_manual_loading && matches!(self.box_scene, BoxScene::Opening { .. }))
+    }
+
+    pub(super) fn box_footer_alphas(&self) -> (f32, f32) {
+        let fade_in = |started: Millis| {
+            (self.now().saturating_sub(started) as f32 / BOX_BAR_FADE_MS as f32).clamp(0.0, 1.0)
+        };
+        let open = if self.box_inspection_from_open {
+            1.0
+        } else {
+            0.0
+        };
+        match self.box_scene {
+            BoxScene::Opening { started } | BoxScene::QuickOpening { started } => {
+                (fade_in(started), 0.0)
+            }
+            BoxScene::Open { .. } => (1.0, self.manual_reader.as_ref().map_or(0.0, |r| r.pickup)),
+            BoxScene::PreparingClose { .. } => (1.0, 0.0),
+            BoxScene::Closing { started } => (1.0 - fade_in(started + BOX_CLOSE_MS), 0.0),
+            BoxScene::QuickClosing { started } => (1.0 - fade_in(started + BOX_QUICK_MS), 0.0),
+            BoxScene::FlippingBack { started, .. } => (open, fade_in(started)),
+            BoxScene::Back { .. } => (open, 1.0),
+            BoxScene::FlippingFront { started, .. } => (open, 1.0 - fade_in(started)),
+            BoxScene::Carousel | BoxScene::QuickLaunched => (0.0, 0.0),
+        }
+    }
+
     pub(super) fn apply_carousel_view(&mut self) {
         let enabled = self.carousel_view == CarouselView::Boxes;
         for (_, shelf) in &mut self.shelves {
@@ -200,15 +232,12 @@ impl App {
 
     fn start_box_inspection(&mut self, from_open: bool) {
         let (center, scale, angle) = if from_open {
-            let (_, _, (_, height, _)) = self.selected_box().expect("selected box");
+            let (cart, _, (_, height, _)) = self.selected_box().expect("selected box");
             let canvas = self.canvas();
             let box_height = height * slot_ui::BOX_VIEW_SCALE;
-            let parked = canvas.h + box_height * 0.15;
-            let t = ((self.box_focus - BOX_FOCUS_BOX_MOVE) / (1.0 - BOX_FOCUS_BOX_MOVE))
-                .clamp(0.0, 1.0);
-            let eased = t * t * (3.0 - 2.0 * t);
-            let y = parked + (canvas.h / 2.0 - parked) * eased;
+            let (y, _) = self.open_box_positions(cart, box_height, 1.0, true);
             self.box_focus = 1.0;
+            self.box_adapter_focus = 0.0;
             ([canvas.w / 2.0, y], slot_ui::BOX_VIEW_SCALE, 0.0)
         } else {
             self.shelf().selected_box_pose(self.canvas())
@@ -259,7 +288,7 @@ impl App {
 
     pub(super) fn tick_box_scene(&mut self) {
         let now = self.now();
-        if self.box_detail_loading || self.box_cart_loading {
+        if self.box_art_loading() {
             match self.box_scene {
                 BoxScene::FlippingBack { from, .. } => {
                     self.box_scene = BoxScene::FlippingBack { started: now, from };
@@ -388,7 +417,8 @@ impl App {
         };
         if !inspecting {
             let target = match item {
-                BoxItem::Manual | BoxItem::Adapter => -1.0,
+                BoxItem::Manual => -1.0,
+                BoxItem::Adapter => ADAPTER_FOCUS,
                 BoxItem::Cartridge => 0.0,
                 BoxItem::Box => 1.0,
             };
@@ -656,7 +686,7 @@ impl App {
             }
             return true;
         }
-        if (self.box_detail_loading || self.box_cart_loading)
+        if self.box_art_loading()
             && matches!(action, Action::GbaDown(Btn::B))
             && matches!(
                 self.box_scene,
@@ -674,6 +704,7 @@ impl App {
             };
             self.box_detail_loading = false;
             self.box_cart_loading = false;
+            self.box_manual_loading = false;
             return true;
         }
         if matches!(
@@ -741,6 +772,7 @@ impl App {
                 }
             }
             BoxScene::Back { zoom, pan } => match action {
+                _ if self.box_resetting && !matches!(action, Action::GbaUp(_)) => true,
                 Action::Favorite | Action::ForgetRecent => true,
                 Action::ShelfLeft
                 | Action::ShelfRight
@@ -808,6 +840,11 @@ impl App {
                             self.box_resetting = false;
                         }
                     }
+                    true
+                }
+                Action::GbaDown(Btn::B) if zoom > 1.001 => {
+                    self.box_resetting = true;
+                    self.box_buttons = [false; 6];
                     true
                 }
                 Action::GbaDown(Btn::B) => {
@@ -887,7 +924,13 @@ impl App {
                     true
                 }
                 Action::GbaDown(Btn::Down) if item == BoxItem::Cartridge => {
-                    self.box_scene = BoxScene::Open { item: BoxItem::Box };
+                    self.box_scene = BoxScene::Open {
+                        item: if self.box_adapter_available() {
+                            BoxItem::Adapter
+                        } else {
+                            BoxItem::Box
+                        },
+                    };
                     self.box_pending = None;
                     self.play_held = None;
                     true
@@ -908,23 +951,23 @@ impl App {
                     };
                     true
                 }
-                Action::GbaDown(Btn::Up)
-                    if item == BoxItem::Manual && self.box_adapter_available() =>
-                {
+                Action::GbaDown(Btn::Up) if item == BoxItem::Adapter => {
                     self.box_scene = BoxScene::Open {
-                        item: BoxItem::Adapter,
+                        item: BoxItem::Cartridge,
                     };
                     true
                 }
                 Action::GbaDown(Btn::Down) if item == BoxItem::Adapter => {
-                    self.box_scene = BoxScene::Open {
-                        item: BoxItem::Manual,
-                    };
+                    self.box_scene = BoxScene::Open { item: BoxItem::Box };
                     true
                 }
                 Action::GbaDown(Btn::Up) if item == BoxItem::Box => {
                     self.box_scene = BoxScene::Open {
-                        item: BoxItem::Cartridge,
+                        item: if self.box_adapter_available() {
+                            BoxItem::Adapter
+                        } else {
+                            BoxItem::Cartridge
+                        },
                     };
                     self.box_zoom = 1.0;
                     self.box_pan = [0.0; 2];
@@ -971,7 +1014,9 @@ impl App {
                     true
                 }
                 Action::GbaDown(Btn::A) | Action::Insert if item == BoxItem::Adapter => {
-                    if self.box_adapter_available() && self.box_focus <= -0.999 {
+                    if self.box_adapter_available()
+                        && (self.box_focus - ADAPTER_FOCUS).abs() < 0.001
+                    {
                         self.box_adapter_core_gpsp = self.box_adapter_gpsp();
                         self.box_adapter_choice =
                             self.root.as_ref().zip(self.selected_box()).is_some_and(
@@ -1226,6 +1271,10 @@ impl App {
         self.box_cart_loading = loading;
     }
 
+    pub fn set_box_manual_loading(&mut self, loading: bool) {
+        self.box_manual_loading = loading;
+    }
+
     pub fn take_prefetched_cart_faces(&mut self, shelf: usize, index: usize) -> Vec<TexId> {
         if !self.boxes_active() || self.bundle_seats().contains(&(shelf, index)) {
             return Vec::new();
@@ -1356,7 +1405,7 @@ impl App {
             BoxScene::QuickLaunched => self.draw_open_box(1.0, out),
             BoxScene::Carousel => return false,
         }
-        if (self.box_detail_loading || self.box_cart_loading)
+        if self.box_art_loading()
             && matches!(
                 self.box_scene,
                 BoxScene::FlippingBack { .. }
@@ -1435,6 +1484,66 @@ impl App {
         );
     }
 
+    fn open_box_positions(
+        &self,
+        cart: &Cart,
+        box_height: f32,
+        progress: f32,
+        show_contents: bool,
+    ) -> (f32, f32) {
+        let canvas = self.canvas();
+        let smooth = |t: f32| {
+            let t = t.clamp(0.0, 1.0);
+            t * t * (3.0 - 2.0 * t)
+        };
+        let ms = progress * BOX_OPEN_MS as f32;
+        let extraction = smooth((ms - 710.0) / 420.0);
+        let move_to_center = smooth((ms - 1330.0) / 170.0)
+            * (1.0
+                - smooth(
+                    (self.box_focus - BOX_FOCUS_CART_DOWN)
+                        / (BOX_FOCUS_BOX_MOVE - BOX_FOCUS_CART_DOWN),
+                ));
+        let pickup = smooth((ms - 1500.0) / 150.0)
+            * (1.0 - smooth(self.box_focus.abs() / BOX_FOCUS_CART_DOWN));
+        let (_, native_h) = slot_ui::cart_box(cart.platform);
+        let native_h = native_h as f32;
+        let target_y = slot_ui::rest_y(canvas, native_h) + native_h / 2.0;
+        let manual_h = slot_ui::manual_dimensions().1 * slot_ui::BOX_VIEW_SCALE;
+        let small_h = slot_ui::loose_cart_dimensions(cart).1 * slot_ui::BOX_VIEW_SCALE;
+        let adapter_h = small_h * 37.7 / 35.0;
+        let has_adapter = show_contents && self.box_adapter_available();
+        let adapter_space = if has_adapter {
+            adapter_h + STACK_GAP
+        } else {
+            0.0
+        };
+        let manual_shift =
+            (STACK_GAP + (manual_h + small_h) / 2.0) * smooth(-self.box_focus) * progress;
+        let parked_y = canvas.h + box_height * 0.15;
+        let mut box_y = parked_y
+            + (canvas.h / 2.0 - parked_y)
+                * smooth((self.box_focus - BOX_FOCUS_BOX_MOVE) / (1.0 - BOX_FOCUS_BOX_MOVE))
+            + manual_shift;
+        let small_center_y = box_y - box_height / 2.0 - STACK_GAP - adapter_space - small_h / 2.0;
+        let emerging_y = box_y - adapter_space / 2.0;
+        let cy = emerging_y + (small_center_y - emerging_y) * extraction;
+        let cart_height = small_h + (native_h - small_h) * pickup;
+        let mut cart_y = cy + (target_y + manual_shift - cy) * move_to_center;
+        if has_adapter {
+            let adapter_center = cart_y + cart_height / 2.0 + STACK_GAP + adapter_h / 2.0;
+            let adapter_focus = smooth(self.box_adapter_focus) * progress;
+            let shift = (target_y - adapter_center) * adapter_focus;
+            box_y += shift;
+            cart_y += shift;
+            if extraction >= 1.0 {
+                let adapter_bottom = cart_y + cart_height / 2.0 + STACK_GAP + adapter_h;
+                box_y += (adapter_bottom + STACK_GAP - (box_y - box_height / 2.0)).max(0.0);
+            }
+        }
+        (box_y, cart_y)
+    }
+
     pub(super) fn draw_open_box(&self, progress: f32, out: &mut Vec<Draw>) {
         let Some((cart, faces, (front_w, front_h, depth))) = self.selected_box() else {
             return;
@@ -1448,12 +1557,6 @@ impl App {
         let ms = p * BOX_OPEN_MS as f32;
         let travel = smooth(ms / 280.0);
         let extraction = smooth((ms - 710.0) / 420.0);
-        let move_to_center = smooth((ms - 1330.0) / 170.0)
-            * (1.0
-                - smooth(
-                    (self.box_focus - BOX_FOCUS_CART_DOWN)
-                        / (BOX_FOCUS_BOX_MOVE - BOX_FOCUS_CART_DOWN),
-                ));
         let pickup = smooth((ms - 1500.0) / 150.0)
             * (1.0 - smooth(self.box_focus.abs() / BOX_FOCUS_CART_DOWN));
         let flap = smooth((ms - 280.0) / 430.0) * (1.0 - smooth((ms - 1130.0) / 370.0));
@@ -1461,19 +1564,20 @@ impl App {
         let tab = smooth((flap - 0.5) * 2.0);
         let scale = slot_ui::BOX_VIEW_SCALE;
         let (w, h) = (front_w * scale, front_h * scale);
-        let selected_y = canvas.h / 2.0;
-        let parked_y = canvas.h + h * 0.15;
         let (_, ch) = slot_ui::cart_box(cart.platform);
         let target_y = slot_ui::rest_y(canvas, ch as f32) + ch as f32 / 2.0;
         let (manual_w, manual_h) = slot_ui::manual_dimensions();
         let (manual_w, manual_h) = (manual_w * scale, manual_h * scale);
         let (small_w, small_h) = slot_ui::loose_cart_dimensions(cart);
         let (small_w, small_h) = (small_w * scale, small_h * scale);
-        let manual_shift = (12.0 + (manual_h + small_h) / 2.0) * smooth(-self.box_focus) * p;
-        let box_y = parked_y
-            + (selected_y - parked_y)
-                * smooth((self.box_focus - BOX_FOCUS_BOX_MOVE) / (1.0 - BOX_FOCUS_BOX_MOVE))
-            + manual_shift;
+        let show_contents = !matches!(
+            self.box_scene,
+            BoxScene::QuickOpening { .. } | BoxScene::QuickLaunched | BoxScene::QuickClosing { .. }
+        );
+        let has_adapter = show_contents && self.box_adapter_available();
+        let adapter_w = small_w * 62.0 / 60.0;
+        let adapter_h = small_h * 37.7 / 35.0;
+        let (box_y, cart_center_y) = self.open_box_positions(cart, h, p, show_contents);
         let origin = if matches!(
             self.box_scene,
             BoxScene::Closing { .. } | BoxScene::QuickClosing { .. }
@@ -1487,19 +1591,15 @@ impl App {
         } else {
             self.box_open_from
         };
+        let (cw, ch) = slot_ui::cart_box(cart.platform);
+        let (cw, ch) = (cw as f32, ch as f32);
+        let cart_width = small_w + (cw - small_w) * pickup;
+        let cart_height = small_h + (ch - small_h) * pickup;
         let zoom = 1.0 + (self.box_zoom - 1.0) * self.box_focus * travel;
         let center = [
             origin.center[0] + (canvas.w / 2.0 + self.box_pan[0] - origin.center[0]) * travel,
             origin.center[1] + (box_y + self.box_pan[1] - origin.center[1]) * travel,
         ];
-        let (cw, ch) = slot_ui::cart_box(cart.platform);
-        let (cw, ch) = (cw as f32, ch as f32);
-        let small_center_y = box_y - h / 2.0 - 12.0 - small_h / 2.0;
-        let emerging_y = box_y + small_h / 2.0;
-        let cy = emerging_y + (small_center_y - emerging_y) * extraction;
-        let cart_width = small_w + (cw - small_w) * pickup;
-        let cart_height = small_h + (ch - small_h) * pickup;
-        let cart_center_y = cy + (target_y + manual_shift - cy) * move_to_center;
         let face_scale = (origin.scale + (scale - origin.scale) * travel) * zoom;
         let angle = origin.angle * (1.0 - travel) + self.box_turn * travel;
         draw_flap(faces.flap, center, w, h, lid, tab, out);
@@ -1527,23 +1627,17 @@ impl App {
         if box_behind_cart {
             draw_box(out);
         }
-        if extraction > 0.0
-            && !matches!(
-                self.box_scene,
-                BoxScene::QuickOpening { .. }
-                    | BoxScene::QuickLaunched
-                    | BoxScene::QuickClosing { .. }
-            )
-        {
+        if extraction > 0.0 && show_contents {
             if let Some(tex) = self
                 .selected_manual_cover()
                 .filter(|_| self.manual_reader.is_none() || self.box_focus > -0.999)
             {
-                let emerging_y = box_y - manual_h / 2.0;
-                let target = cart_center_y - cart_height / 2.0 - 12.0 - manual_h;
+                let behind = cart_center_y - manual_h / 2.0;
+                let target = cart_center_y - cart_height / 2.0 - STACK_GAP - manual_h;
+                let slide_out = smooth((ms - 1130.0) / 370.0);
                 out.push(Draw::Tex {
                     x: canvas.w / 2.0 - manual_w / 2.0,
-                    y: emerging_y + (target - emerging_y) * extraction,
+                    y: behind + (target - behind) * slide_out,
                     w: manual_w,
                     h: manual_h,
                     tex,
@@ -1563,26 +1657,13 @@ impl App {
                 out,
             );
         }
-        if extraction > 0.0
-            && !matches!(
-                self.box_scene,
-                BoxScene::QuickOpening { .. }
-                    | BoxScene::QuickLaunched
-                    | BoxScene::QuickClosing { .. }
-            )
-            && self.box_adapter_available()
-        {
+        if extraction > 0.0 && has_adapter {
             if let Some(sprites) = self.link_sprites {
-                let aw = small_w * 62.0 / 60.0;
-                let ah = small_h * 37.7 / 35.0;
-                let target = cart_center_y - cart_height / 2.0 - 12.0 - manual_h;
-                let y = box_y - manual_h / 2.0 + (target - (box_y - manual_h / 2.0)) * extraction;
+                let y = cart_center_y + cart_height / 2.0 + STACK_GAP;
                 let pickup = smooth(self.box_adapter_pickup);
                 let full_w = sprites.adapter.w as f32;
                 let full_h = sprites.adapter.h as f32;
-                let x = canvas.w / 2.0 + manual_w / 2.0
-                    - aw * 0.35
-                    - 24.0 * smooth(self.box_adapter_focus);
+                let x = (canvas.w - adapter_w) / 2.0;
                 let full_x = (canvas.w - full_w) / 2.0;
                 let full_y = ((canvas.h - MOUTH_H - full_h) / 2.0 - 35.0).max(0.0);
                 if pickup > 0.0 {
@@ -1597,8 +1678,8 @@ impl App {
                 out.push(Draw::Tex {
                     x: x + (full_x - x) * pickup,
                     y: y + (full_y - y) * pickup,
-                    w: aw + (full_w - aw) * pickup,
-                    h: ah + (full_h - ah) * pickup,
+                    w: adapter_w + (full_w - adapter_w) * pickup,
+                    h: adapter_h + (full_h - adapter_h) * pickup,
                     tex: sprites.adapter.tex,
                     alpha: 1.0,
                 });

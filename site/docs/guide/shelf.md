@@ -60,18 +60,23 @@ Artwork for neighboring boxes loads in the background. If artwork for a
 newly selected box is still loading when it is opened or inspected, the
 carousel shows a loading indicator; press <kbd>B</kbd> to cancel.
 
-The cartridge is selected first in Open Box View. Press <kbd>Down</kbd> to select the box and
-<kbd>Up</kbd> to return to the cartridge. When a manual is available, press
-<kbd>Up</kbd> from the cartridge to select its cover, and <kbd>Down</kbd> to
-return. With the cartridge selected, the
+The cartridge is selected first in Open Box View. Press <kbd>Down</kbd> to move
+toward the box and <kbd>Up</kbd> to return to the cartridge. When a manual is
+available, press <kbd>Up</kbd> from the cartridge to select its cover, and
+<kbd>Down</kbd> to return. If a Wireless Adapter is present, it sits between
+the cartridge and box: use <kbd>Up</kbd> and <kbd>Down</kbd> to move through
+the stack. With the cartridge selected, the
 cartridge controls above apply. Open the box to change the emulator or use
 Cartridge Studio. Games without box art retain the regular cartridge controls
 directly on the carousel.
+The bottom bar replaces the carousel's status indicators with controls while
+keeping the cartridge slot visible. Inspecting a manual or box covers the
+slot with a plugged bar and displays the inspection controls.
 While Kid Mode is locked, boxes and manuals can still be inspected, but
 Cartridge Studio, the emulator picker and settings remain locked.
 
 FireRed and LeafGreen boxes with manuals may also contain a Wireless Adapter.
-Press <kbd>Up</kbd> from the manual to select it, then <kbd>A</kbd> to pick it
+Press <kbd>Down</kbd> from the cartridge to select it, then <kbd>A</kbd> to pick it
 up. With gpSP selected, choose whether Host/Join should open automatically when
 that cartridge is inserted; use <kbd>Left</kbd>/<kbd>Right</kbd>, then
 <kbd>A</kbd> to save. <kbd>B</kbd> puts the adapter down. The choice is saved
@@ -93,7 +98,8 @@ inspection view as <kbd>SELECT</kbd> on the carousel. It opens on the front;
 press <kbd>A</kbd> or <kbd>SELECT</kbd> to flip to the back, if available.
 On the back, hold <kbd>R1</kbd> or <kbd>L1</kbd> to zoom and directions to
 pan. Zoom stops when the back fills the screen width, even for smaller images.
-The front cannot be zoomed. <kbd>B</kbd> returns to the previous view.
+The front cannot be zoomed. <kbd>B</kbd> resets the zoom first, then returns
+to the previous view when pressed again.
 
 ## The shelves
 
